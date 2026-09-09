@@ -20,7 +20,6 @@
     }
   },
   "packageManager": "pnpm@12.3.4",
-  "type": "module",
   "dependencies": {
     "@prisma/client": "^6.19.3",
     "dotenv": "^17.4.2",

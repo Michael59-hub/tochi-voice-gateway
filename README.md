@@ -79,7 +79,15 @@ Docker Compose starts PostgreSQL and the application together. Set the variables
 docker compose up --build
 ```
 
-The application container runs pending Prisma migrations before starting the server. Stop the stack with:
+The application container starts the compiled server and does not run migrations automatically. Apply pending migrations from the application image after PostgreSQL is healthy:
+
+```bash
+docker compose up -d postgres
+docker compose run --rm app pnpm exec prisma migrate deploy
+docker compose up app
+```
+
+Stop the stack with:
 
 ```bash
 docker compose down
