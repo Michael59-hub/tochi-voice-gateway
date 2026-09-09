@@ -1,0 +1,66 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+enum InstallationStatus {
+  ACTIVE
+  REVOKED
+}
+
+enum Platform {
+  ANDROID
+  IOS
+}
+
+enum QuotaTier {
+  UNVERIFIED
+  VERIFIED
+}
+
+enum AttestationType {
+  PLAY_INTEGRITY
+  APP_ATTEST
+  NONE
+}
+
+enum RequestRecordStatus {
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
+model Installation {
+  id                    String              @id @default(uuid())
+  refreshCredentialHash String              @unique
+  status                InstallationStatus  @default(ACTIVE)
+  platform              Platform
+  quotaTier             QuotaTier           @default(UNVERIFIED)
+  attestationType       AttestationType     @default(NONE)
+  createdAt             DateTime            @default(now())
+  lastSeenAt            DateTime            @default(now())
+  revokedAt             DateTime?
+
+  voiceRequestRecords   VoiceRequestRecord[]
+
+  @@map("installations")
+}
+
+model VoiceRequestRecord {
+  id                     String              @id @default(uuid())
+  installationId         String
+  installation           Installation        @relation(fields: [installationId], references: [id])
+  idempotencyKey         String
+  requestFingerprintHmac String
+  status                 RequestRecordStatus @default(PROCESSING)
+  createdAt              DateTime            @default(now())
+  expiresAt              DateTime
+
+  @@unique([installationId, idempotencyKey])
+  @@index([expiresAt])
+  @@map("voice_request_records")
+}
