@@ -1,0 +1,22 @@
+info:
+  name: Status
+  type: http
+  seq: 1
+
+http:
+  method: GET
+  url: http://localhost:3000/v1/voice/requests/{{idempotency_key}}/status
+  auth:
+    type: bearer
+    token: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpbnN0YWxsYXRpb25JZCI6Ijk0Mjk2ZTc3LTFmZjItNDUyMS04ZDU0LTJiNTljMjk4ZjBiOCIsInRpZXIiOiJVTlZFUklGSUVEIiwiaWF0IjoxNzg5MDI5MzgyLCJleHAiOjE3ODkwMzAyODJ9.BXHe5cuXujoKyJV6YhDGF0k1-jd6ALgUqFTGHar-gjc
+
+runtime:
+  variables:
+    - name: idempotency_key
+      value: "{{idempotency_key}}"
+
+settings:
+  encodeUrl: true
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5

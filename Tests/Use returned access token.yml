@@ -1,0 +1,47 @@
+info:
+  name: Use returned access token
+  type: http
+  seq: 1
+
+http:
+  method: POST
+  url: http://localhost:3000/v1/voice/transcribe
+  headers:
+    - name: Idempotency-Key
+      value: "{{idempotency_key}"
+  body:
+    type: multipart-form
+    data:
+      - name: meta
+        type: text
+        value: '{"schemaVersion":1,"capturedAtEpochMs":1234567890000,"timezone":"Africa/Lagos","parse":true}'
+        contentType: Text
+      - name: audio
+        type: file
+        value:
+          - file_example_MP3_700KB.mp3
+        contentType: File
+  auth:
+    type: bearer
+    token: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpbnN0YWxsYXRpb25JZCI6Ijk0Mjk2ZTc3LTFmZjItNDUyMS04ZDU0LTJiNTljMjk4ZjBiOCIsInRpZXIiOiJVTlZFUklGSUVEIiwiaWF0IjoxNzg5MDQ1MjU5LCJleHAiOjE3ODkwNDYxNTl9.ayhkSQWkm4MTxaQEJgRZRozBFJV7Pu9_7AdAFr5Ziwk
+
+runtime:
+  scripts:
+    - type: before-request
+      code: |-
+        // Pre Request script
+        let currentKey = bru.getVar("idempotency_key");
+
+        if (!currentKey) {
+          const crypto = require("crypto");
+          currentKey = crypto.randomUUID();
+          bru.setVar("idempotency_key", currentKey);
+        }
+
+        console.log("Idempotency Key:", currentKey);
+
+settings:
+  encodeUrl: true
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5

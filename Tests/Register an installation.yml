@@ -1,0 +1,41 @@
+info:
+  name: Register an installation
+  type: http
+  seq: 1
+
+http:
+  method: POST
+  url: http://localhost:3000/v1/installations/register
+  body:
+    type: json
+    data: |-
+      {
+        "platform": "ANDROID"
+      }
+  auth: inherit
+
+runtime:
+  scripts:
+    - type: after-response
+      code: |-
+        const body = res.getBody();
+        const data = typeof body === 'string' ? JSON.parse(body) : body;
+
+        if (res.getStatus() !== 201 || !data?.accessToken) {
+          throw new Error(`Registration did not return an access token (HTTP ${res.getStatus()})`);
+        }
+
+        bru.setEnvVar('accessToken', data.accessToken);
+        bru.setVar('accessToken', data.accessToken);
+        console.log('Saved accessToken to the active environment');
+
+        if (data.refreshCredential) {
+          bru.setEnvVar('refreshCredential', data.refreshCredential);
+          bru.setVar('refreshCredential', data.refreshCredential);
+        }
+
+settings:
+  encodeUrl: true
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5

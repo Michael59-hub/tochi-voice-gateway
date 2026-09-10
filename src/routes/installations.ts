@@ -3,10 +3,11 @@ import { prisma } from '../lib/prisma';
 import { generateRefreshCredential, hashRefreshCredential } from '../lib/crypto';
 import { signAccessToken } from '../lib/jwt';
 import { requireInstallationAuth } from '../middleware/requestPrincipal';
+import { registrationRateLimit } from '../middleware/registrationRateLimit';
 
 export const installationsRouter = Router();
 
-installationsRouter.post('/register', async (req, res) => {
+installationsRouter.post('/register', registrationRateLimit, async (req, res) => {
   const { platform } = req.body as { platform?: 'ANDROID' | 'IOS' };
 
   if (platform !== 'ANDROID' && platform !== 'IOS') {

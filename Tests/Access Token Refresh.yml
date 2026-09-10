@@ -1,0 +1,21 @@
+info:
+  name: Access Token Refresh
+  type: http
+  seq: 1
+
+http:
+  method: POST
+  url: http://localhost:3000/v1/installations/refresh
+  body:
+    type: json
+    data: |-
+      {
+        "refreshCredential": "7HCmgjidj35Fra8-M-p-WlzV0BlEFf7_al6eubvu0gA"
+      }
+  auth: inherit
+
+settings:
+  encodeUrl: true
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5

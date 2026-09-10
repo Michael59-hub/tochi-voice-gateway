@@ -1,0 +1,6 @@
+name: Room
+variables:
+  - name: accessToken
+    value: paste-token-here
+  - name: refreshCredential
+    value: paste-token-here
