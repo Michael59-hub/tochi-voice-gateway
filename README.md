@@ -1,6 +1,6 @@
 # Tochi Voice Gateway
 
-An Express and Prisma service for managing device installations and issuing credentials for the Tochi voice gateway.
+An Express and Prisma service for managing device installations, issuing credentials, and processing bounded voice transcription requests.
 
 ## Current scope
 
@@ -9,11 +9,15 @@ Implemented:
 - `GET /health`
 - Installation registration for Android and iOS
 - Access-token authentication with 15-minute JWTs
-- Refresh-credential rotation
-- Installation lookup and revocation
+- Refresh-credential rotation and installation lookup/revocation
+- Authenticated audio transcription with request metadata validation
+- Audio signature validation, a 5 MB upload limit, and a 60-second claimed-duration limit
+- Per-installation and global concurrency limits, daily quota limits, and an in-memory emergency disable switch
+- Idempotency-key reservation and request-status polling
+- Pluggable mock and Sahara transcription providers
 - PostgreSQL persistence through Prisma
 
-Voice requests, quota enforcement, idempotency handling, and upload validation are reserved for a later implementation. The corresponding source files are currently placeholders.
+The current implementation is intentionally single-process in a few places: concurrency counters, the voice disable switch, and provider selection are held in application memory. Audio request results are not cached, and the Sahara adapter's response shape is provisional until its onboarding contract is verified.
 
 ## Requirements
 
@@ -39,21 +43,28 @@ DB_NAME=tochi_voice
 DB_PORT=5432
 DATABASE_URL=postgresql://tochi:change-me@localhost:5432/tochi_voice?schema=public
 JWT_SIGNING_SECRET=replace-with-a-long-random-secret
+REQUEST_FINGERPRINT_SECRET=replace-with-a-different-long-random-secret
+ADMIN_API_SECRET=replace-with-an-admin-secret
+VOICE_PROVIDER_MODE=mock
+SAHARA_API_URL=https://example.invalid
+SAHARA_API_KEY=replace-when-using-sahara
 PORT=3000
+ADMIN_PORT=4000
 ```
 
-`DATABASE_URL`, `JWT_SIGNING_SECRET`, and `PORT` are used by the application. `DB_USER`, `DB_PASSWORD`, `DB_NAME`, and `DB_PORT` are used by Docker Compose and should match the local database connection in `DATABASE_URL`.
+`DATABASE_URL`, `JWT_SIGNING_SECRET`, `REQUEST_FINGERPRINT_SECRET`, `ADMIN_API_SECRET`, `VOICE_PROVIDER_MODE`, `PORT`, and `ADMIN_PORT` are used by the application. `DB_USER`, `DB_PASSWORD`, `DB_NAME`, and `DB_PORT` are used by Docker Compose and should match the local database connection in `DATABASE_URL`. `SAHARA_API_URL` and `SAHARA_API_KEY` are required only when `VOICE_PROVIDER_MODE=sahara`.
 
 The server loads `.env` automatically when it starts.
 
-Do not commit `.env` or expose `JWT_SIGNING_SECRET`. Refresh credentials are returned only at registration or refresh time and should be stored securely by the client.
+Do not commit `.env` or expose any signing, fingerprint, admin, or provider secret. Refresh credentials are returned only at registration or refresh time and should be stored securely by the client. The admin API binds to `127.0.0.1` and requires `X-Admin-Secret`.
 
 ## Local development
 
-Install dependencies, generate the Prisma client, and apply the development migration:
+Install dependencies, start PostgreSQL, generate the Prisma client, and apply the development migration:
 
 ```bash
 pnpm install
+docker compose up -d postgres
 pnpm prisma:generate
 pnpm prisma:migrate
 ```
@@ -86,6 +97,8 @@ docker compose up -d postgres
 docker compose run --rm app pnpm exec prisma migrate deploy
 docker compose up app
 ```
+
+The current Compose file passes the database URL, JWT secret, and public port to the app container. Pass `ADMIN_API_SECRET`, `REQUEST_FINGERPRINT_SECRET`, and the provider variables through the Compose environment as well when using the containerized app; the admin listener is not published by default.
 
 Stop the stack with:
 
@@ -153,6 +166,49 @@ curl -X DELETE http://localhost:3000/v1/installations/me \
 ```
 
 Successful revocation returns `204 No Content`. The access-token middleware returns `401` when the bearer token is missing, invalid, or expired.
+
+### Transcribe audio
+
+Send a `multipart/form-data` request with an `audio` file and a JSON `meta` field. The request must include an `Idempotency-Key` and an installation access token:
+
+```bash
+curl -X POST http://localhost:3000/v1/voice/transcribe \
+  -H 'Authorization: Bearer ACCESS_TOKEN' \
+  -H 'Idempotency-Key: request-123' \
+  -F 'audio=@recording.m4a;type=audio/mp4' \
+  -F 'meta={"schemaVersion":1,"capturedAtEpochMs":1760000000000,"timezone":"UTC","languageHint":"en-US","parse":true}'
+```
+
+Supported detected audio formats are MP4/M4A, WAV, OGG, and MP3. The metadata requires `schemaVersion: 1`, `capturedAtEpochMs`, `timezone`, and a boolean `parse`. An optional `languageHint` can be passed to the provider. A successful response contains the transcript, provider name, and a request ID; when `parse` is true it also contains the current draft reminder shape.
+
+The endpoint returns `400` for missing idempotency keys or audio, `415` for unsupported audio, `422` for invalid metadata, `409` for idempotency conflicts or duplicate/in-progress requests, `429` for quota/concurrency limits, `502` for provider failures, and `503` when voice processing is disabled. The default `UNVERIFIED` tier allows one concurrent request and 20 requests per day; the `VERIFIED` tier allows three concurrent requests and 200 requests per day. The process-wide provider concurrency limit is 10.
+
+### Check request status
+
+```bash
+curl http://localhost:3000/v1/voice/requests/request-123/status \
+  -H 'Authorization: Bearer ACCESS_TOKEN'
+```
+
+Returns `PROCESSING`, `COMPLETED`, or `FAILED`. Completed responses do not repeat the transcript or draft.
+
+### Admin voice switch
+
+The admin API listens on `127.0.0.1:4000` by default and is not exposed by the public Express app. It requires the configured `X-Admin-Secret` header:
+
+```bash
+curl -X POST http://127.0.0.1:4000/v1/admin/voice/disable \
+  -H 'X-Admin-Secret: ADMIN_API_SECRET'
+
+curl -X POST http://127.0.0.1:4000/v1/admin/voice/enable \
+  -H 'X-Admin-Secret: ADMIN_API_SECRET'
+```
+
+The switch affects the current process only.
+
+### Provider selection
+
+`VOICE_PROVIDER_MODE=mock` is the default and returns deterministic mock transcription data. Set `VOICE_PROVIDER_MODE=sahara` and provide `SAHARA_API_URL` and `SAHARA_API_KEY` to call the Sahara adapter. The adapter uses an 8-second timeout.
 
 ## Project commands
 
