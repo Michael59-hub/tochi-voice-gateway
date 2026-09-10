@@ -8,7 +8,7 @@ http:
   url: http://localhost:3000/v1/voice/transcribe
   headers:
     - name: Idempotency-Key
-      value: "{{idempotency_key}"
+      value: "{{idempotency_key"
   body:
     type: multipart-form
     data:
