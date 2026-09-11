@@ -14,10 +14,10 @@ Implemented:
 - Audio signature validation, a 5 MB upload limit, and a 60-second claimed-duration limit
 - Per-installation and global concurrency limits, daily quota limits, and an in-memory emergency disable switch
 - Idempotency-key reservation and request-status polling
-- Pluggable mock and Sahara transcription providers
+- Pluggable mock and Sahara transcription providers, including multipart requests to Intron's synchronous upload API
 - PostgreSQL persistence through Prisma
 
-The current implementation is intentionally single-process in a few places: concurrency counters, the voice disable switch, and provider selection are held in application memory. Audio request results are not cached, and the Sahara adapter's response shape is provisional until its onboarding contract is verified.
+The current implementation is intentionally single-process in a few places: concurrency counters, the voice disable switch, and provider selection are held in application memory. Audio request results are not cached.
 
 ## Requirements
 
@@ -208,7 +208,13 @@ The switch affects the current process only.
 
 ### Provider selection
 
-`VOICE_PROVIDER_MODE=mock` is the default and returns deterministic mock transcription data. Set `VOICE_PROVIDER_MODE=sahara` and provide `SAHARA_API_URL` and `SAHARA_API_KEY` to call the Sahara adapter. The adapter uses an 8-second timeout.
+`VOICE_PROVIDER_MODE=mock` is the default and returns deterministic mock transcription data. Set `VOICE_PROVIDER_MODE=sahara` and provide `SAHARA_API_URL` and `SAHARA_API_KEY` to call the Sahara adapter.
+
+The Sahara adapter sends the original audio filename, MIME type, and audio bytes as a multipart request. It passes `languageHint` through to Intron and defaults to `en` when no language hint is provided. The client-side timeout is 125 seconds to accommodate Intron's synchronous processing window. HTTP 400, 429, and 503 responses are mapped to unsupported-input, rate-limit, and timeout provider failures respectively; other non-success responses are returned as provider failures.
+
+### HTTP request collections
+
+The `Tests/` directory contains OpenCollection request files for registration, token refresh, status checks, authenticated transcription, and direct Intron adapter testing. Keep provider credentials out of committed collections and supply a local audio fixture when running the Intron request. WAV fixtures placed directly in `Tests/` are ignored by Git.
 
 ## Project commands
 
