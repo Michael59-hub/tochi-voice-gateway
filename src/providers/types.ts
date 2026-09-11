@@ -1,5 +1,6 @@
 export interface TranscriptionRequest {
   audioBuffer: Buffer;
+  fileName: string;
   mimeType: string;
   languageHint?: string;
 }
@@ -7,24 +8,22 @@ export interface TranscriptionRequest {
 export interface TranscriptionSuccess {
   kind: 'SUCCESS';
   provider: string;
-  model: string;
+  model?: string; // not every provider returns one — Intron doesn't
   transcript: string;
-  confidence?: number; // ASR confidence — kept separate from parser/intent confidence
+  confidence?: number;
   latencyMs: number;
 }
 
 export interface TranscriptionFailure {
   kind: 'FAILURE';
   provider: string;
-  errorCode: 'TIMEOUT' | 'PROVIDER_ERROR' | 'UNSUPPORTED_INPUT';
+  errorCode: 'TIMEOUT' | 'PROVIDER_ERROR' | 'UNSUPPORTED_INPUT' | 'RATE_LIMITED';
   message: string;
+  retryAfterSeconds?: number;
 }
 
 export type TranscriptionResult = TranscriptionSuccess | TranscriptionFailure;
 
-// One interface every adapter (Sahara, comparators, mock) implements.
-// Route code and the benchmark harness both depend only on this shape —
-// swapping providers never touches voice.ts.
 export interface SpeechProviderAdapter {
   readonly providerName: string;
   transcribe(request: TranscriptionRequest): Promise<TranscriptionResult>;

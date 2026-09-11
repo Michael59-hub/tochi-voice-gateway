@@ -1,85 +1,125 @@
+import axios, { isAxiosError } from 'axios';
+import FormData from 'form-data';
 import { SpeechProviderAdapter, TranscriptionRequest, TranscriptionResult } from './types';
 
-const SAHARA_API_URL = process.env.SAHARA_API_URL;
+const SAHARA_API_URL =
+  process.env.SAHARA_API_URL ?? 'https://infer.voice.intron.io/file/v1/upload/sync';
 const SAHARA_API_KEY = process.env.SAHARA_API_KEY;
-const SAHARA_TIMEOUT_MS = 8000;
+const SAHARA_TIMEOUT_MS = 125_000;
 
-// Shape is a best guess pending Sahara's actual onboarding docs (Step 4.2
-// says "implement from its verified onboarding documentation") — treat
-// every field name here as provisional until checked against the real spec.
-interface SaharaResponseBody {
-  transcript: string;
-  model: string;
-  confidence?: number;
+interface IntronSuccessBody {
+  data: {
+    file_id: string;
+    processing_status: 'FILE_TRANSCRIBED' | string;
+    audio_file_name: string;
+    audio_transcript: string;
+    processed_audio_duration_in_seconds: number;
+  };
+  message: string;
+  status: string;
+}
+
+interface IntronErrorBody {
+  data: Record<string, unknown>;
+  message: string;
+  status: string;
 }
 
 export class SaharaAdapter implements SpeechProviderAdapter {
   readonly providerName = 'sahara';
 
   constructor() {
-    if (!SAHARA_API_URL || !SAHARA_API_KEY) {
-      throw new Error('SAHARA_API_URL and SAHARA_API_KEY must be set to use the Sahara adapter');
+    if (!SAHARA_API_KEY) {
+      throw new Error('SAHARA_API_KEY must be set to use the Sahara adapter');
     }
   }
 
   async transcribe(request: TranscriptionRequest): Promise<TranscriptionResult> {
     const startedAt = Date.now();
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), SAHARA_TIMEOUT_MS);
+
+    const form = new FormData();
+    form.append('audio_file_name', request.fileName);
+    form.append('audio_file_blob', request.audioBuffer, {
+      filename: request.fileName,
+      contentType: request.mimeType,
+    });
+    form.append('use_language_asr_input', request.languageHint ?? 'en');
 
     try {
-      const response = await fetch(`${SAHARA_API_URL}/v1/transcribe`, {
-        method: 'POST',
+      const response = await axios.post<IntronSuccessBody>(SAHARA_API_URL, form, {
         headers: {
           Authorization: `Bearer ${SAHARA_API_KEY}`,
-          'Content-Type': request.mimeType,
-          ...(request.languageHint ? { 'X-Language-Hint': request.languageHint } : {}),
+          ...form.getHeaders(), // sets Content-Type with the correct multipart boundary
         },
-        body: request.audioBuffer,
-        signal: controller.signal,
+        timeout: SAHARA_TIMEOUT_MS,
+        validateStatus: () => true, // handle all status codes ourselves below
       });
 
-      clearTimeout(timeout);
-
-      if (!response.ok) {
+      if (response.status === 429) {
+        const retryAfterHeader = response.headers['retry-after'];
         return {
           kind: 'FAILURE',
           provider: this.providerName,
-          errorCode: 'PROVIDER_ERROR',
-          message: `Sahara returned HTTP ${response.status}`,
+          errorCode: 'RATE_LIMITED',
+          message: 'Sahara rate limit exceeded (30 req/min)',
+          retryAfterSeconds: retryAfterHeader ? Number(retryAfterHeader) : undefined,
         };
       }
 
-      const body = (await response.json()) as SaharaResponseBody;
-
-      return {
-        kind: 'SUCCESS',
-        provider: this.providerName,
-        model: body.model,
-        transcript: body.transcript,
-        confidence: body.confidence,
-        latencyMs: Date.now() - startedAt,
-      };
-    } catch (err) {
-      clearTimeout(timeout);
-
-      if (err instanceof Error && err.name === 'AbortError') {
+      if (response.status === 503) {
         return {
           kind: 'FAILURE',
           provider: this.providerName,
           errorCode: 'TIMEOUT',
-          message: 'Sahara request exceeded timeout',
+          message: 'Sahara exceeded its 120s processing window',
         };
       }
 
-      // Per Step 4.2: "one retry only for definite pre-send network failures."
-      // This catch block covers post-send failures (connection reset mid-flight,
-      // DNS resolution failure before any bytes sent, etc.) — a real distinction
-      // between "definitely pre-send" and "possibly reached the provider" needs
-      // care here; a naive retry risks double-charging if the request did land.
-      // Leaving as a single attempt for now — do not add a retry without
-      // confirming Sahara's own idempotency support, per the plan's explicit
-      // caution in Step 3.6.
+      if (response.status === 400) {
+        const body = response.data as unknown as IntronErrorBody;
+        return {
+          kind: 'FAILURE',
+          provider: this.providerName,
+          errorCode: 'UNSUPPORTED_INPUT',
+          message: `Sahara rejected the audio: ${body.message}`,
+        };
+      }
+
+      if (response.status !== 200) {
+        return {
+          kind: 'FAILURE',
+          provider: this.providerName,
+          errorCode: 'PROVIDER_ERROR',
+          message: `Sahara returned HTTP ${response.status}: ${JSON.stringify(response.data)}`,
+        };
+      }
+
+      const body = response.data;
+      if (!body.data.audio_transcript || body.data.audio_transcript.trim().length === 0) {
+        return {
+          kind: 'FAILURE',
+          provider: this.providerName,
+          errorCode: 'PROVIDER_ERROR',
+          message: `Sahara returned no transcript (status: ${body.data.processing_status})`,
+        };
+      }
+
+      return {
+        kind: 'SUCCESS',
+        provider: this.providerName,
+        transcript: body.data.audio_transcript,
+        latencyMs: Date.now() - startedAt,
+      };
+    } catch (err) {
+      if (isAxiosError(err) && err.code === 'ECONNABORTED') {
+        return {
+          kind: 'FAILURE',
+          provider: this.providerName,
+          errorCode: 'TIMEOUT',
+          message: 'Sahara request exceeded client-side timeout',
+        };
+      }
+
       return {
         kind: 'FAILURE',
         provider: this.providerName,

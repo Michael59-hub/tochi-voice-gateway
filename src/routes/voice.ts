@@ -50,8 +50,8 @@ voiceRouter.post(
   
     try {
       meta = JSON.parse(req.body.meta);
-    } catch {
-      return res.status(422).json({ error: 'INVALID_METADATA' });
+    } catch(err) {
+      return res.status(422).json({ error: 'INVALID_METADATA', err: err });
     }
     if (meta.schemaVersion !== metadataSchema.schemaVersion) {
       return res.status(400).json({ error: 'UNSUPPORTED_SCHEMA_VERSION' });
@@ -102,13 +102,14 @@ voiceRouter.post(
       const provider = getPrimaryProvider();
       const transcriptionResult = await provider.transcribe({
         audioBuffer: req.file.buffer,
-        mimeType: req.file.mimetype,
+        fileName: req.file.originalname || 'audio.wav',
+        mimeType: req.file.mimetype, // e.g. "audio/wav" — or better, thread through the file-type-detected mime if validateAudioUpload returns it
         languageHint: meta.languageHint,
       });
 
       if (transcriptionResult.kind === 'FAILURE') {
         await markVoiceRequestFailed(installationId, idempotencyKey);
-        return res.status(502).json({ error: 'PROVIDER_FAILURE' });
+        return res.status(502).json({ error: 'PROVIDER_FAILURE', details: transcriptionResult.message });
       }
 
       const result = {

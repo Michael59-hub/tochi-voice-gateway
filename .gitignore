@@ -34,5 +34,6 @@ Thumbs.db
 *.db
 *.db-journal
 
-
+Tests/*.wav
+Tests/*.mp3
 

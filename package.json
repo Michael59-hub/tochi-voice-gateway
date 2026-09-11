@@ -22,10 +22,12 @@
   "packageManager": "pnpm@12.3.4",
   "dependencies": {
     "@prisma/client": "^6.19.3",
+    "axios": "^1.20.0",
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
     "express-rate-limit": "^8.7.0",
     "file-type": "^22.0.2",
+    "form-data": "^4.0.6",
     "jsonwebtoken": "^9.0.3",
     "multer": "^2.3.0"
   },

@@ -1,0 +1,33 @@
+info:
+  name: Intron test
+  type: http
+  seq: 1
+
+http:
+  method: POST
+  url: https://infer.voice.intron.io/file/v1/upload/sync
+  body:
+    type: multipart-form
+    data:
+      - name: audio_file_name
+        type: text
+        value: test
+        contentType: Text
+      - name: audio_file_blob
+        type: file
+        value:
+          - Recording0004.wav
+        contentType: File
+      - name: use_language_asr_input
+        type: text
+        value: en
+        contentType: Text
+  auth:
+    type: bearer
+    token: uihRd7qYczwo_DBXIyQ7AiPiK1avnPQgcT5E1HSrBzEEfymHCOlt0Ko6rdpnT5PxN7U8b3dehj20cJOSA0n-5A
+
+settings:
+  encodeUrl: true
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5
