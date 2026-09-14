@@ -10,7 +10,7 @@ http:
     type: json
     data: |-
       {
-        "refreshCredential": "34LENbPExgiHObdqFYRCkM5_TiWtO8FxAWPqBBihNw0"
+        "refreshCredential": "f7yWqBxc-TAOR3ubkBYXzhZlk0PSTcrhNXTIBIekL2A"
       }
   auth: inherit
 
@@ -18,5 +18,4 @@ settings:
   encodeUrl: true
   timeout: 0
   followRedirects: true
-  maxRedirects: 5
-​
+  maxRedirects: 5​

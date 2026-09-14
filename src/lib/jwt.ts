@@ -1,6 +1,6 @@
 import jwt from 'jsonwebtoken';
 
-const ACCESS_TOKEN_TTL_SECONDS = 15 * 60;
+const ACCESS_TOKEN_TTL_SECONDS = 60 * 60;
 const SECRET = process.env.JWT_SIGNING_SECRET ?? '';
 
 if (!SECRET) {

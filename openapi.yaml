@@ -1,0 +1,418 @@
+openapi: 3.0.3
+info:
+  title: Tochi Voice Gateway
+  version: "1.0.0"
+  description: >
+    Backend service for Tochi's voice feature. Handles installation
+    authentication, audio transcription, and draft action parsing.
+    The backend never returns a local or future task identifier, and
+    never selects which local task a spoken query refers to — all
+    resolution and confirmation happens on the Android client.
+
+servers:
+  - url: https://api.tochi.example/v1
+    description: Production (placeholder — replace with real host once deployed)
+  - url: http://localhost:3000/v1
+    description: Local development
+
+tags:
+  - name: installations
+    description: Installation-based authentication (no user accounts in v1)
+  - name: voice
+    description: Audio transcription and action-draft parsing
+
+paths:
+  /installations/register:
+    post:
+      tags: [installations]
+      summary: Register a new installation and receive credentials
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [platform]
+              properties:
+                platform:
+                  type: string
+                  enum: [ANDROID, IOS]
+      responses:
+        '201':
+          description: Installation created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RegisterResponse'
+        '400':
+          description: Invalid or missing platform
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          description: Registration rate limit exceeded for this IP
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /installations/refresh:
+    post:
+      tags: [installations]
+      summary: Rotate credentials using a valid refresh credential
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [refreshCredential]
+              properties:
+                refreshCredential:
+                  type: string
+      responses:
+        '200':
+          description: New credentials issued
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RefreshResponse'
+        '400':
+          description: Missing refresh credential
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Invalid or revoked refresh credential
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /installations/me:
+    get:
+      tags: [installations]
+      summary: Read the current installation's state
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Installation state
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InstallationState'
+        '401':
+          description: Missing, invalid, or expired access token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Installation not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    delete:
+      tags: [installations]
+      summary: Revoke the current installation's credentials
+      security:
+        - bearerAuth: []
+      responses:
+        '204':
+          description: Installation revoked
+        '401':
+          description: Missing, invalid, or expired access token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /voice/transcribe:
+    post:
+      tags: [voice]
+      summary: Transcribe an audio clip and optionally parse it into an action draft
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: true
+          description: Client-generated UUID, stable for one utterance's complete network lifecycle
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [audio, meta]
+              properties:
+                audio:
+                  type: string
+                  format: binary
+                  description: M4A/AAC, WAV, or OGG audio file, max 60s and 5MB
+                meta:
+                  type: string
+                  description: JSON-encoded string matching TranscribeMetadata
+      responses:
+        '200':
+          description: Transcript, and optionally a parsed draft or draftError
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TranscribeResponse'
+        '400':
+          description: Missing idempotency key, missing audio, oversized input, or unsupported schema version
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Missing, invalid, or expired access token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: REQUEST_IN_PROGRESS, ALREADY_PROCESSED, or IDEMPOTENCY_CONFLICT
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '415':
+          description: Audio failed container/codec validation (BAD_FORMAT)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Malformed metadata JSON or missing required metadata fields
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          description: Quota exceeded (concurrency or daily limit) or VOICE_DISABLED is not this code — see 503
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '502':
+          description: Primary provider failure
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: VOICE_DISABLED — emergency or maintenance disable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /voice/requests/{idempotencyKey}/status:
+    get:
+      tags: [voice]
+      summary: Poll the status of a previously submitted transcription request
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: idempotencyKey
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Current status of the request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StatusResponse'
+        '401':
+          description: Missing, invalid, or expired access token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: No request found for this installation and key
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  schemas:
+    ErrorResponse:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
+          description: Machine-readable error code, e.g. BAD_FORMAT, VOICE_DISABLED, IDEMPOTENCY_CONFLICT
+        details:
+          type: string
+          description: Optional human-readable detail. Never present in production for provider-originated messages.
+
+    RegisterResponse:
+      type: object
+      required: [installationId, accessToken, refreshCredential, quotaTier]
+      properties:
+        installationId:
+          type: string
+          format: uuid
+        accessToken:
+          type: string
+          description: Short-lived JWT, ~15 minute TTL
+        refreshCredential:
+          type: string
+          description: Opaque high-entropy token. Shown exactly once — store it now (Android Keystore-protected).
+        quotaTier:
+          type: string
+          enum: [UNVERIFIED, VERIFIED]
+
+    RefreshResponse:
+      type: object
+      required: [accessToken, refreshCredential, quotaTier]
+      properties:
+        accessToken:
+          type: string
+        refreshCredential:
+          type: string
+          description: A NEW opaque token — the old one is invalidated immediately on rotation.
+        quotaTier:
+          type: string
+          enum: [UNVERIFIED, VERIFIED]
+
+    InstallationState:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum: [ACTIVE, REVOKED]
+        platform:
+          type: string
+          enum: [ANDROID, IOS]
+        quotaTier:
+          type: string
+          enum: [UNVERIFIED, VERIFIED]
+        createdAt:
+          type: string
+          format: date-time
+        lastSeenAt:
+          type: string
+          format: date-time
+
+    TranscribeMetadata:
+      type: object
+      required: [schemaVersion, capturedAtEpochMs, timezone, parse]
+      properties:
+        schemaVersion:
+          type: integer
+          enum: [1]
+        capturedAtEpochMs:
+          type: integer
+          format: int64
+          description: UTC epoch milliseconds from capture
+        timezone:
+          type: string
+          description: IANA ZoneId, e.g. Africa/Lagos
+        languageHint:
+          type: string
+          description: 'Optional ASR language hint, e.g. "en" or "pcm" (Nigerian Pidgin, code-switch capable). Defaults to "en" server-side if omitted.'
+        parse:
+          type: boolean
+          description: Whether the backend should attempt to produce an action draft in addition to the transcript
+        audio:
+          type: object
+          properties:
+            durationSeconds:
+              type: number
+
+    VoiceActionDraft:
+      type: object
+      required: [schemaVersion, intent]
+      properties:
+        schemaVersion:
+          type: integer
+          enum: [1]
+        intent:
+          type: string
+          enum:
+            - CREATE_TASK
+            - CREATE_REMINDER
+            - COMPLETE_TASK
+            - RESCHEDULE_TASK
+            - LIST_TODAY
+            - START_TIMER
+            - PLAN_GOAL
+            - UNKNOWN
+        title:
+          type: string
+          description: Present for CREATE_TASK, CREATE_REMINDER
+        rawTimePhrase:
+          type: string
+          description: Spoken time phrase, exactly as said. Validation happens on Android, not here.
+        targetQuery:
+          type: string
+          description: Spoken search text only — NEVER a task identifier. Present for COMPLETE_TASK, RESCHEDULE_TASK.
+        timerDurationRawPhrase:
+          type: string
+          description: Present for START_TIMER
+        planSteps:
+          type: array
+          items:
+            type: string
+          description: Present for PLAN_GOAL, minimum 2 concrete steps
+
+    TranscribeResponse:
+      type: object
+      required: [schemaVersion, requestId, transcript, provider]
+      properties:
+        schemaVersion:
+          type: integer
+          enum: [1]
+        requestId:
+          type: string
+          format: uuid
+        transcript:
+          type: string
+        provider:
+          type: string
+          example: sahara
+        draft:
+          $ref: '#/components/schemas/VoiceActionDraft'
+          description: Present only if meta.parse was true and parsing succeeded
+        draftError:
+          type: string
+          description: Present only if meta.parse was true and the parser produced invalid output. Mutually exclusive with draft.
+
+    StatusResponse:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [PROCESSING, COMPLETED, FAILED]
+          description: >
+            Terminal states carry no cached content — this endpoint confirms
+            completion, it does not return the transcript or draft again.

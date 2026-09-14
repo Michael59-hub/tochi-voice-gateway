@@ -12,6 +12,8 @@ import {
   markVoiceRequestFailed,
 } from '../lib/idempotency';
 import { getPrimaryProvider } from '../providers';
+import { parseTranscriptToDraft } from '../parser';
+import { SCHEMA_VERSION } from '../parser/types';
 
 export const voiceRouter = Router();
 
@@ -112,31 +114,37 @@ voiceRouter.post(
         return res.status(502).json({ error: 'PROVIDER_FAILURE', details: transcriptionResult.message });
       }
 
+      let draftPayload: object = {};
+
+      if (meta.parse) {
+        const parseResult = await parseTranscriptToDraft(transcriptionResult.transcript);
+
+        if (parseResult.kind === 'DRAFT_ERROR') {
+          // Per Section 12: invalid parser output returns draftError rather
+          // than being repaired with guesses. Transcript is still returned —
+          // only the draft is withheld.
+          draftPayload = { draftError: parseResult.reason };
+        } else {
+          draftPayload = { draft: parseResult.draft };
+        }
+      }
+
       const result = {
-        schemaVersion: 1,
+        schemaVersion: SCHEMA_VERSION,
         requestId: randomUUID(),
         transcript: transcriptionResult.transcript,
         provider: transcriptionResult.provider,
-        ...(meta.parse
-          ? {
-              draft: {
-                schemaVersion: 1,
-                intent: 'CREATE_REMINDER',
-                title: 'submit my assignment',
-                rawTimePhrase: 'tomorrow at 8 in the morning',
-              },
-            }
-          : {}),
+        ...draftPayload,
       };
 
       await markVoiceRequestCompleted(installationId, idempotencyKey);
       return res.status(200).json(result);
-    } catch (err) {
-      await markVoiceRequestFailed(installationId, idempotencyKey);
-      return res.status(502).json({ error: 'PROVIDER_FAILURE' });
-    }
-  },
-);
+          } catch (err) {
+            await markVoiceRequestFailed(installationId, idempotencyKey);
+            return res.status(502).json({ error: 'PROVIDER_FAILURE' });
+          }
+        },
+      );
 
 
 voiceRouter.get(
