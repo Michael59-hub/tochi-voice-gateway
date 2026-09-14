@@ -67,6 +67,7 @@ voiceRouter.post(
     if (!validation.ok) {
       return res.status(validation.errorCode === 'TOO_LONG' ? 400 : 415).json({
         error: validation.errorCode,
+        actualDurationSeconds: validation.actualDurationSeconds,
       });
     }
 

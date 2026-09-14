@@ -8,22 +8,22 @@ http:
   url: http://localhost:3000/v1/voice/transcribe
   headers:
     - name: Idempotency-Key
-      value: "{{idempotency_"
+      value: "{{idempoten"
   body:
     type: multipart-form
     data:
       - name: meta
         type: text
-        value: '{"schemaVersion":1,"capturedAtEpochMs":1234567890000,"timezone":"Africa/Lagos","languageHint":"en","parse":true}'
+        value: '{"schemaVersion":1,"capturedAtEpochMs":1234567890000,"timezone":"Africa/Lagos","languageHint":"en","parse":true, "audio":{"durationSeconds":5}}'
         contentType: Text
       - name: audio
         type: file
         value:
-          - planSpecific.wav
+          - planSpecificTitle.wav
         contentType: File
   auth:
     type: bearer
-    token: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpbnN0YWxsYXRpb25JZCI6IjBjZjIwNjM5LTk0ZDctNDU1NC1hOGM2LWIyMTdiOWFlNTBhYSIsInRpZXIiOiJVTlZFUklGSUVEIiwiaWF0IjoxNzg5NDAxODMxLCJleHAiOjE3ODk0MDU0MzF9.35o36rv4waaRejoCv3zKE48ubs1M7GcKhcM1WwlnvlU
+    token: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpbnN0YWxsYXRpb25JZCI6IjBjZjIwNjM5LTk0ZDctNDU1NC1hOGM2LWIyMTdiOWFlNTBhYSIsInRpZXIiOiJVTlZFUklGSUVEIiwiaWF0IjoxNzg5NDA1NjIyLCJleHAiOjE3ODk0MDkyMjJ9.buE-O4RkLtHWAqVfJ0xgIqr6CR86AsBXbnGhcPJ_yjU
 
 runtime:
   scripts:
