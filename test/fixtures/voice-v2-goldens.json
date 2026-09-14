@@ -1,0 +1,11 @@
+[
+  {"schemaVersion":2,"utteranceId":"utt-create-task","intent":"CREATE_TASK","originalTranscript":"add buy milk","proposedTitle":"Buy milk","category":"PERSONAL","priority":"MEDIUM","ambiguous":false},
+  {"schemaVersion":2,"utteranceId":"utt-create-reminder","intent":"CREATE_REMINDER","originalTranscript":"remind me to call mom tomorrow at 9am","proposedTitle":"Call mom","temporal":{"kind":"RELATIVE","relativeMillis":86400000,"hour":9,"minute":0,"originalPhrase":"tomorrow at 9am","ambiguous":false,"past":false},"category":"PERSONAL","priority":"HIGH","ambiguous":false},
+  {"schemaVersion":2,"utteranceId":"utt-complete","intent":"COMPLETE_TASK","originalTranscript":"mark buy milk done","targetQuery":"Buy milk","ambiguous":false},
+  {"schemaVersion":2,"utteranceId":"utt-reschedule","intent":"RESCHEDULE_TASK","originalTranscript":"move buy milk to tomorrow at 10","targetQuery":"Buy milk","temporal":{"kind":"RELATIVE","relativeMillis":86400000,"hour":10,"minute":0,"originalPhrase":"tomorrow at 10","ambiguous":false,"past":false},"ambiguous":false},
+  {"schemaVersion":2,"utteranceId":"utt-today","intent":"LIST_TODAY","originalTranscript":"what is on today","ambiguous":false},
+  {"schemaVersion":2,"utteranceId":"utt-timer","intent":"START_TIMER","originalTranscript":"start a five minute timer for tea","timerDurationMillis":300000,"timerLabel":"Tea","timerDeliveryMode":"ALARM","ambiguous":false},
+  {"schemaVersion":2,"utteranceId":"utt-plan","intent":"PLAN_GOAL","originalTranscript":"plan my study night","proposedTitle":"Study night","proposedGoalTasks":[{"title":"Review notes","category":"STUDY","priority":"HIGH"},{"title":"Practice problems","category":"STUDY","priority":"MEDIUM"}],"ambiguous":false},
+  {"schemaVersion":2,"utteranceId":"utt-series","intent":"CREATE_SERIES","originalTranscript":"every Monday Wednesday and Friday at 9 remind me to plan my day","proposedTitle":"Plan my day","proposedNotes":"weekday planning","category":"PERSONAL","priority":"MEDIUM","series":{"ruleKind":"WEEKLY","interval":1,"weekdaysMask":37,"monthlyDay":1,"localTimeMinute":540,"startEpochDay":20339,"endMode":"NEVER","reminderEnabled":true,"reminderMode":"APP"},"ambiguous":false},
+  {"schemaVersion":2,"utteranceId":"utt-unknown","intent":"UNKNOWN","originalTranscript":"do something unclear","ambiguous":true}
+]

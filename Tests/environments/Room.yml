@@ -4,3 +4,5 @@ variables:
     value: paste-token-here
   - name: refreshCredential
     value: paste-token-here
+  - name: saharaApiKey
+    value: paste-provider-token-here

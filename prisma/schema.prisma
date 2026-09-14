@@ -36,18 +36,21 @@ enum RequestRecordStatus {
 }
 
 model Installation {
-  id                    String              @id @default(uuid())
-  refreshCredentialHash String              @unique
-  status                InstallationStatus  @default(ACTIVE)
-  platform              Platform
-  quotaTier             QuotaTier           @default(UNVERIFIED)
-  attestationType       AttestationType     @default(NONE)
-  createdAt             DateTime            @default(now())
-  lastSeenAt            DateTime            @default(now())
-  revokedAt             DateTime?
+  id                                 String              @id @default(uuid())
+  refreshCredentialHash              String              @unique
+  previousRefreshCredentialHash      String?
+  previousRefreshCredentialExpiresAt DateTime?
+  status                             InstallationStatus  @default(ACTIVE)
+  platform                           Platform
+  quotaTier                          QuotaTier           @default(UNVERIFIED)
+  attestationType                    AttestationType     @default(NONE)
+  createdAt                          DateTime            @default(now())
+  lastSeenAt                         DateTime            @default(now())
+  revokedAt                          DateTime?
 
   voiceRequestRecords   VoiceRequestRecord[]
 
+  @@index([previousRefreshCredentialHash])
   @@map("installations")
 }
 

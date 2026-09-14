@@ -1,4 +1,4 @@
-import { Router } from 'express';
+import { RequestHandler, Router } from 'express';
 import multer from 'multer';
 import { prisma } from '../lib/prisma';
 import { createHash, randomUUID } from 'crypto';
@@ -7,11 +7,16 @@ import { enforceQuota } from '../middleware/quota';
 import { validateAudioUpload } from '../lib/uploadValidation';
 import {
   computeRequestFingerprint,
+  computeProposeV2Fingerprint,
   reserveVoiceRequest,
   markVoiceRequestCompleted,
   markVoiceRequestFailed,
 } from '../lib/idempotency';
-import { getPrimaryProvider } from '../providers';
+import { getPrimaryProvider, getPrimaryProposalProvider } from '../providers';
+import {
+  validateVoiceActionDraftV2,
+  validateVoiceProposeMetadataV2,
+} from '../contracts/voiceV2';
 
 export const voiceRouter = Router();
 
@@ -19,6 +24,25 @@ const upload = multer({
   storage: multer.memoryStorage(), // bounded by limits below; never touches disk unvalidated
   limits: { fileSize: 5 * 1024 * 1024 },
 });
+
+const proposeUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 1_000_000 },
+});
+
+const proposeAudioUpload: RequestHandler = (req, res, next) => {
+  proposeUpload.single('audio')(req, res, (error: unknown) => {
+    if (error instanceof multer.MulterError && error.code === 'LIMIT_FILE_SIZE') {
+      res.status(413).json({ error: 'AUDIO_TOO_LARGE' });
+      return;
+    }
+    if (error) {
+      res.status(422).json({ error: 'INVALID_MULTIPART' });
+      return;
+    }
+    next();
+  });
+};
 
 const metadataSchema = {
   schemaVersion: 1,
@@ -50,8 +74,8 @@ voiceRouter.post(
   
     try {
       meta = JSON.parse(req.body.meta);
-    } catch(err) {
-      return res.status(422).json({ error: 'INVALID_METADATA', err: err });
+    } catch {
+      return res.status(422).json({ error: 'INVALID_METADATA' });
     }
     if (meta.schemaVersion !== metadataSchema.schemaVersion) {
       return res.status(400).json({ error: 'UNSUPPORTED_SCHEMA_VERSION' });
@@ -67,7 +91,6 @@ voiceRouter.post(
         error: validation.errorCode,
       });
     }
-
     const installationId = req.principal!.installationId;
     const audioSha256 = createHash('sha256').update(req.file.buffer).digest('hex');
 
@@ -109,7 +132,7 @@ voiceRouter.post(
 
       if (transcriptionResult.kind === 'FAILURE') {
         await markVoiceRequestFailed(installationId, idempotencyKey);
-        return res.status(502).json({ error: 'PROVIDER_FAILURE', details: transcriptionResult.message });
+        return res.status(502).json({ error: 'PROVIDER_FAILURE' });
       }
 
       const result = {
@@ -138,6 +161,131 @@ voiceRouter.post(
   },
 );
 
+voiceRouter.post(
+  '/propose',
+  requireInstallationAuth,
+  enforceQuota,
+  proposeAudioUpload,
+  async (req, res) => {
+    const idempotencyKey = req.header('Idempotency-Key');
+    if (!idempotencyKey) {
+      return res.status(400).json({ error: 'MISSING_IDEMPOTENCY_KEY' });
+    }
+    if (!req.file) {
+      return res.status(400).json({ error: 'MISSING_AUDIO' });
+    }
+
+    let rawMetadata: unknown;
+    try {
+      rawMetadata = JSON.parse(req.body.metadata);
+    } catch {
+      return res.status(422).json({ error: 'INVALID_METADATA' });
+    }
+    const metadataResult = validateVoiceProposeMetadataV2(rawMetadata);
+    if (!metadataResult.ok) {
+      const status = metadataResult.reason === 'version' ? 400 : 422;
+      const error = metadataResult.reason === 'version'
+        ? 'UNSUPPORTED_CONTRACT_VERSION'
+        : 'INVALID_METADATA';
+      return res.status(status).json({ error });
+    }
+    const metadata = metadataResult.value;
+    if (metadata.idempotencyKey !== idempotencyKey) {
+      return res.status(400).json({ error: 'IDEMPOTENCY_KEY_MISMATCH' });
+    }
+    if (metadata.sizeBytes !== req.file.buffer.byteLength) {
+      return res.status(422).json({ error: 'INVALID_METADATA' });
+    }
+
+    const validation = await validateAudioUpload(
+      req.file.buffer,
+      metadata.durationMillis / 1000,
+      1_000_000,
+    );
+    if (!validation.ok) {
+      return res.status(validation.errorCode === 'TOO_LONG' ? 413 : 415).json({
+        error: validation.errorCode === 'TOO_LONG' ? 'AUDIO_TOO_LARGE' : 'UNSUPPORTED_AUDIO',
+      });
+    }
+    if (validation.detectedMime !== 'audio/mp4') {
+      return res.status(415).json({ error: 'UNSUPPORTED_AUDIO' });
+    }
+    const declaredMime = metadata.mimeType === 'audio/x-m4a'
+      ? 'audio/mp4'
+      : metadata.mimeType;
+    if (declaredMime !== validation.detectedMime) {
+      return res.status(422).json({ error: 'INVALID_METADATA' });
+    }
+
+    const installationId = req.principal!.installationId;
+    const audioSha256 = createHash('sha256').update(req.file.buffer).digest('hex');
+    const fingerprint = computeProposeV2Fingerprint({
+      installationId,
+      audioSha256,
+      utteranceId: metadata.utteranceId,
+      contractVersion: metadata.contractVersion,
+      capturedAtMillis: metadata.capturedAtMillis,
+      timeZoneId: metadata.timeZoneId,
+      detectedMime: validation.detectedMime,
+      container: metadata.container,
+      encoder: metadata.encoder,
+      channelCount: metadata.channelCount,
+      sampleRateHz: metadata.sampleRateHz,
+      durationMillis: metadata.durationMillis,
+      sizeBytes: metadata.sizeBytes,
+    });
+    const reservation = await reserveVoiceRequest(installationId, idempotencyKey, fingerprint);
+    switch (reservation.kind) {
+      case 'REQUEST_IN_PROGRESS':
+        return res.status(409).json({ error: 'REQUEST_IN_PROGRESS' });
+      case 'ALREADY_PROCESSED':
+        return res.status(409).json({ error: 'ALREADY_PROCESSED' });
+      case 'IDEMPOTENCY_CONFLICT':
+        return res.status(409).json({ error: 'IDEMPOTENCY_CONFLICT' });
+      case 'RESERVED':
+        break;
+    }
+
+    try {
+      const transcription = await getPrimaryProvider().transcribe({
+        audioBuffer: req.file.buffer,
+        fileName: req.file.originalname || `${metadata.utteranceId}.m4a`,
+        mimeType: validation.detectedMime,
+      });
+      if (transcription.kind === 'FAILURE') {
+        await markVoiceRequestFailed(installationId, idempotencyKey);
+        if (transcription.errorCode === 'RATE_LIMITED') {
+          return res.status(429).json({ error: 'RATE_LIMITED' });
+        }
+        if (transcription.errorCode === 'TIMEOUT') {
+          return res.status(504).json({ error: 'PROVIDER_TIMEOUT' });
+        }
+        if (transcription.errorCode === 'UNSUPPORTED_INPUT') {
+          return res.status(415).json({ error: 'UNSUPPORTED_AUDIO' });
+        }
+        return res.status(502).json({ error: 'PROVIDER_FAILURE' });
+      }
+
+      const proposed = await getPrimaryProposalProvider().propose({
+        utteranceId: metadata.utteranceId,
+        transcript: transcription.transcript,
+        capturedAtMillis: metadata.capturedAtMillis,
+        timeZoneId: metadata.timeZoneId,
+      });
+      const draft = validateVoiceActionDraftV2(proposed, metadata.utteranceId);
+      if (!draft.ok) {
+        await markVoiceRequestFailed(installationId, idempotencyKey);
+        return res.status(422).json({ error: 'INVALID_PROPOSAL' });
+      }
+
+      await markVoiceRequestCompleted(installationId, idempotencyKey);
+      return res.status(200).json(draft.value);
+    } catch {
+      await markVoiceRequestFailed(installationId, idempotencyKey);
+      return res.status(502).json({ error: 'PROVIDER_FAILURE' });
+    }
+  },
+);
 
 voiceRouter.get(
   '/requests/:idempotencyKey/status',

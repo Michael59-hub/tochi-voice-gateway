@@ -1,3 +1,5 @@
+import type { VoiceActionDraftV2 } from '../contracts/voiceV2';
+
 export interface TranscriptionRequest {
   audioBuffer: Buffer;
   fileName: string;
@@ -27,4 +29,16 @@ export type TranscriptionResult = TranscriptionSuccess | TranscriptionFailure;
 export interface SpeechProviderAdapter {
   readonly providerName: string;
   transcribe(request: TranscriptionRequest): Promise<TranscriptionResult>;
+}
+
+export interface ProposalRequest {
+  utteranceId: string;
+  transcript: string;
+  capturedAtMillis: number;
+  timeZoneId: string;
+}
+
+export interface VoiceProposalProvider {
+  readonly providerName: string;
+  propose(request: ProposalRequest): Promise<VoiceActionDraftV2>;
 }

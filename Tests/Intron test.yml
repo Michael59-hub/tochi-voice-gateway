@@ -24,7 +24,7 @@ http:
         contentType: Text
   auth:
     type: bearer
-    token: uihRd7qYczwo_DBXIyQ7AiPiK1avnPQgcT5E1HSrBzEEfymHCOlt0Ko6rdpnT5PxN7U8b3dehj20cJOSA0n-5A
+    token: "{{saharaApiKey}}"
 
 settings:
   encodeUrl: true
