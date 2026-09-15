@@ -1,9 +1,10 @@
 import { Router } from 'express';
 import { prisma } from '../lib/prisma';
-import { generateRefreshCredential, hashRefreshCredential } from '../lib/crypto';
-import { signAccessToken } from '../lib/jwt';
+import { generateRefreshCredential } from '../lib/crypto';
+import { issueAccessToken } from '../lib/jwt';
+import { rotateRefreshCredential } from '../lib/refreshRotation';
 import { requireInstallationAuth } from '../middleware/requestPrincipal';
-import { registrationRateLimit } from '../middleware/registrationRateLimit';
+import { refreshRateLimit, registrationRateLimit } from '../middleware/registrationRateLimit';
 
 export const installationsRouter = Router();
 
@@ -24,54 +25,45 @@ installationsRouter.post('/register', registrationRateLimit, async (req, res) =>
     },
   });
 
-  const accessToken = signAccessToken({
+  const issued = issueAccessToken({
     installationId: installation.id,
     tier: installation.quotaTier,
   });
 
   return res.status(201).json({
     installationId: installation.id,
-    accessToken,
+    accessToken: issued.accessToken,
+    accessTokenExpiresAtEpochMs: issued.accessTokenExpiresAtEpochMs,
     refreshCredential,
     quotaTier: installation.quotaTier,
   });
 });
 
-installationsRouter.post('/refresh', async (req, res) => {
+installationsRouter.post('/refresh', refreshRateLimit, async (req, res) => {
   const { refreshCredential } = req.body as { refreshCredential?: string };
 
   if (!refreshCredential) {
     return res.status(400).json({ error: 'MISSING_REFRESH_CREDENTIAL' });
   }
 
-  const hash = hashRefreshCredential(refreshCredential);
-  const installation = await prisma.installation.findUnique({
-    where: { refreshCredentialHash: hash },
-  });
-
-  if (!installation || installation.status === 'REVOKED') {
+  const rotation = await rotateRefreshCredential(refreshCredential);
+  if (rotation.kind === 'INVALID') {
     return res.status(401).json({ error: 'INVALID_OR_REVOKED_CREDENTIAL' });
   }
+  if (rotation.kind === 'CONFLICT') {
+    return res.status(409).json({ error: 'REFRESH_IN_PROGRESS' });
+  }
 
-  const { raw: newRefreshCredential, hash: newHash } = generateRefreshCredential();
-
-  const updated = await prisma.installation.update({
-    where: { id: installation.id },
-    data: {
-      refreshCredentialHash: newHash,
-      lastSeenAt: new Date(),
-    },
-  });
-
-  const accessToken = signAccessToken({
-    installationId: updated.id,
-    tier: updated.quotaTier,
+  const issued = issueAccessToken({
+    installationId: rotation.installationId,
+    tier: rotation.quotaTier,
   });
 
   return res.status(200).json({
-    accessToken,
-    refreshCredential: newRefreshCredential,
-    quotaTier: updated.quotaTier,
+    accessToken: issued.accessToken,
+    accessTokenExpiresAtEpochMs: issued.accessTokenExpiresAtEpochMs,
+    refreshCredential: rotation.refreshCredential,
+    quotaTier: rotation.quotaTier,
   });
 });
 

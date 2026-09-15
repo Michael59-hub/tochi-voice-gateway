@@ -37,3 +37,6 @@ Thumbs.db
 Tests/*.wav
 Tests/*.mp3
 
+# Local scratch/environment files; never commit credentials.
+nano.env
+docker-compose.yml.backup

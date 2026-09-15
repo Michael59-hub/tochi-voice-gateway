@@ -11,7 +11,8 @@ Implemented:
 - Access-token authentication with 15-minute JWTs
 - Refresh-credential rotation and installation lookup/revocation
 - Authenticated audio transcription with request metadata validation
-- Audio signature validation, a 5 MB upload limit, and a 60-second claimed-duration limit
+- Android-compatible contract-v2 voice proposals
+- Audio signature validation, a 5 MB upload limit, and M4A container-duration validation
 - Per-installation and global concurrency limits, daily quota limits, and an in-memory emergency disable switch
 - Idempotency-key reservation and request-status polling
 - Pluggable mock and Sahara transcription providers, including multipart requests to Intron's synchronous upload API
@@ -136,6 +137,7 @@ curl -X POST http://localhost:3000/v1/installations/register \
 {
   "installationId": "...",
   "accessToken": "...",
+  "accessTokenExpiresAtEpochMs": 1789030282000,
   "refreshCredential": "...",
   "quotaTier": "UNVERIFIED"
 }
@@ -149,7 +151,7 @@ curl -X POST http://localhost:3000/v1/installations/refresh \
   -d '{"refreshCredential":"..."}'
 ```
 
-Refreshing rotates the credential. Replace the stored refresh credential with the one returned by this endpoint. A missing, invalid, or revoked credential returns `401`.
+Refreshing rotates the credential. Replace the stored refresh credential with the one returned by this endpoint. Access tokens remain valid for 15 minutes and the response includes `accessTokenExpiresAtEpochMs`. The immediately previous refresh credential has a two-minute, race-safe recovery window for a client that crashes before persisting the rotated value. A missing, expired, invalid, or revoked credential returns `401`.
 
 ### Get the current installation
 
@@ -183,6 +185,50 @@ Supported detected audio formats are MP4/M4A, WAV, OGG, and MP3. The metadata re
 
 The endpoint returns `400` for missing idempotency keys or audio, `415` for unsupported audio, `422` for invalid metadata, `409` for idempotency conflicts or duplicate/in-progress requests, `429` for quota/concurrency limits, `502` for provider failures, and `503` when voice processing is disabled. The default `UNVERIFIED` tier allows one concurrent request and 20 requests per day; the `VERIFIED` tier allows three concurrent requests and 200 requests per day. The process-wide provider concurrency limit is 10.
 
+### Propose an Android voice action (contract v2)
+
+`POST /v1/voice/propose` uses the same installation bearer authentication, quota controls, audio validation, and server-selected speech provider as `/transcribe`. It accepts multipart parts named `audio` and `metadata`; normal audio, transcripts, and proposal drafts are not persisted.
+
+The `metadata` part is strict JSON:
+
+```json
+{
+  "contractVersion": 2,
+  "utteranceId": "4bd4be90-7832-4bf4-9893-bf777bf6c72b",
+  "idempotencyKey": "4bd4be90-7832-4bf4-9893-bf777bf6c72b",
+  "capturedAtMillis": 1789372800000,
+  "timeZoneId": "Africa/Lagos",
+  "mimeType": "audio/mp4",
+  "container": "mpeg4",
+  "encoder": "aac",
+  "channelCount": 1,
+  "sampleRateHz": 16000,
+  "durationMillis": 4200,
+  "sizeBytes": 84217
+}
+```
+
+The metadata idempotency key must equal the `Idempotency-Key` header. Audio is limited to 1 MB and 60 seconds. This v2 endpoint accepts Tochi's Android format: AAC in an MPEG-4/M4A container (`audio/mp4`, `.m4a`); its signature and MP4 container duration are validated. The v1 `/transcribe` endpoint retains its broader format support. Success is a raw `VoiceActionDraft` v2 object, not a response wrapper:
+
+```json
+{
+  "schemaVersion": 2,
+  "utteranceId": "4bd4be90-7832-4bf4-9893-bf777bf6c72b",
+  "intent": "CREATE_TASK",
+  "originalTranscript": "add buy milk",
+  "proposedTitle": "Buy milk",
+  "category": "PERSONAL",
+  "priority": "MEDIUM",
+  "ambiguous": false
+}
+```
+
+Supported intents are `CREATE_TASK`, `CREATE_REMINDER`, `COMPLETE_TASK`, `RESCHEDULE_TASK`, `LIST_TODAY`, `START_TIMER`, `PLAN_GOAL`, `CREATE_SERIES`, and `UNKNOWN`. The backend returns proposal text only and never returns task, reminder, timer, or series IDs.
+
+Idempotency records remain content-free. Matching `PROCESSING` requests return `409 REQUEST_IN_PROGRESS`; matching `COMPLETED` requests return `409 ALREADY_PROCESSED`; matching `FAILED` requests may be atomically processed again; and a different fingerprint under the same key returns `409 IDEMPOTENCY_CONFLICT`.
+
+Stable v2 errors include `INVALID_METADATA` (422), `INVALID_PROPOSAL` (422), `AUDIO_TOO_LARGE` (413), `UNSUPPORTED_AUDIO` (415), `RATE_LIMITED` (429), `PROVIDER_TIMEOUT` (504), and sanitized `PROVIDER_FAILURE` (502).
+
 ### Check request status
 
 ```bash
@@ -208,13 +254,15 @@ The switch affects the current process only.
 
 ### Provider selection
 
-`VOICE_PROVIDER_MODE=mock` is the default and returns deterministic mock transcription data. Set `VOICE_PROVIDER_MODE=sahara` and provide `SAHARA_API_URL` and `SAHARA_API_KEY` to call the Sahara adapter.
+`VOICE_PROVIDER_MODE=mock` is the default and returns deterministic mock transcription data. `/propose` then uses the server-side deterministic mock proposal provider for local Android integration. Set `VOICE_PROVIDER_MODE=sahara` and provide `SAHARA_API_URL` and `SAHARA_API_KEY` to call the Sahara transcription adapter; a production proposal provider remains future work.
 
 The Sahara adapter sends the original audio filename, MIME type, and audio bytes as a multipart request. It passes `languageHint` through to Intron and defaults to `en` when no language hint is provided. The client-side timeout is 125 seconds to accommodate Intron's synchronous processing window. HTTP 400, 429, and 503 responses are mapped to unsupported-input, rate-limit, and timeout provider failures respectively; other non-success responses are returned as provider failures.
 
+Sahara remains the production speech provider. A separate, non-production comparison of Sahara, OpenAI `gpt-transcribe`, and OpenAI `whisper-1` is specified in [`docs/VOICE_BENCHMARK_PLAN.md`](docs/VOICE_BENCHMARK_PLAN.md); benchmark providers must never become runtime fallbacks for ordinary Android requests.
+
 ### HTTP request collections
 
-The `Tests/` directory contains OpenCollection request files for registration, token refresh, status checks, authenticated transcription, and direct Intron adapter testing. Keep provider credentials out of committed collections and supply a local audio fixture when running the Intron request. WAV fixtures placed directly in `Tests/` are ignored by Git.
+The `Tests/` directory contains secret-free OpenCollection requests for registration, token refresh, status checks, authenticated transcription, v2 proposal calls, and direct Intron adapter testing. Supply credentials through the local environment and provide a local audio fixture. WAV fixtures placed directly in `Tests/` are ignored by Git. For the v2 manual request, update `sizeBytes` to the exact selected file size.
 
 ## Project commands
 
@@ -222,6 +270,7 @@ The `Tests/` directory contains OpenCollection request files for registration, t
 | --- | --- |
 | `pnpm dev` | Run the development server with reloads |
 | `pnpm build` | Compile TypeScript to `dist/` |
+| `pnpm test` | Run the automated contract, route, idempotency, and refresh tests |
 | `pnpm start` | Run the compiled server |
 | `pnpm prisma:generate` | Generate the Prisma client |
 | `pnpm prisma:migrate` | Create/apply a development migration |

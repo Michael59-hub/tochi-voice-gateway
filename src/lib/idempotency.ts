@@ -22,6 +22,22 @@ export interface FingerprintInput {
   normalizedMimeAndContainer: string;
 }
 
+export interface ProposeV2FingerprintInput {
+  installationId: string;
+  audioSha256: string;
+  utteranceId: string;
+  contractVersion: number;
+  capturedAtMillis: number;
+  timeZoneId: string;
+  detectedMime: string;
+  container: string;
+  encoder: string;
+  channelCount: number;
+  sampleRateHz: number;
+  durationMillis: number;
+  sizeBytes: number;
+}
+
 export function computeRequestFingerprint(input: FingerprintInput): string {
   const canonical = [
     input.installationId,
@@ -34,6 +50,26 @@ export function computeRequestFingerprint(input: FingerprintInput): string {
     input.normalizedMimeAndContainer,
   ].join('|');
 
+  return createHmac('sha256', HMAC_SECRET!).update(canonical).digest('hex');
+}
+
+export function computeProposeV2Fingerprint(input: ProposeV2FingerprintInput): string {
+  const canonical = [
+    'voice-propose-v2',
+    input.installationId,
+    input.audioSha256,
+    input.utteranceId,
+    String(input.contractVersion),
+    String(input.capturedAtMillis),
+    input.timeZoneId,
+    input.detectedMime,
+    input.container,
+    input.encoder,
+    String(input.channelCount),
+    String(input.sampleRateHz),
+    String(input.durationMillis),
+    String(input.sizeBytes),
+  ].join('|');
   return createHmac('sha256', HMAC_SECRET!).update(canonical).digest('hex');
 }
 
@@ -65,7 +101,7 @@ export async function reserveVoiceRequest(
     });
     return { kind: 'RESERVED' };
   } catch (e) {
-    if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002') {
+    if ((e instanceof Prisma.PrismaClientKnownRequestError || isPrismaUniqueError(e)) && e.code === 'P2002') {
       const existing = await prisma.voiceRequestRecord.findUnique({
         where: {
           installationId_idempotencyKey: { installationId, idempotencyKey },
@@ -86,11 +122,31 @@ export async function reserveVoiceRequest(
         return { kind: 'REQUEST_IN_PROGRESS' };
       }
 
-      // COMPLETED or FAILED with a matching fingerprint
+      if (existing.status === 'FAILED') {
+        const retry = await prisma.voiceRequestRecord.updateMany({
+          where: {
+            id: existing.id,
+            status: 'FAILED',
+            requestFingerprintHmac: fingerprint,
+          },
+          data: {
+            status: 'PROCESSING',
+            expiresAt: new Date(Date.now() + RECORD_TTL_HOURS * 60 * 60 * 1000),
+          },
+        });
+        if (retry.count === 1) return { kind: 'RESERVED' };
+        return reserveVoiceRequest(installationId, idempotencyKey, fingerprint);
+      }
+
+      // COMPLETED with a matching fingerprint remains content-free.
       return { kind: 'ALREADY_PROCESSED' };
     }
     throw e;
   }
+}
+
+function isPrismaUniqueError(value: unknown): value is { code: string } {
+  return typeof value === 'object' && value !== null && 'code' in value;
 }
 
 export async function markVoiceRequestCompleted(installationId: string, idempotencyKey: string) {

@@ -1,0 +1,40 @@
+info:
+  name: Propose voice action v2
+  type: http
+  seq: 2
+
+http:
+  method: POST
+  url: http://localhost:3000/v1/voice/propose
+  headers:
+    - name: Idempotency-Key
+      value: "{{idempotency_key}}"
+  body:
+    type: multipart-form
+    data:
+      - name: metadata
+        type: text
+        value: '{"contractVersion":2,"utteranceId":"{{idempotency_key}}","idempotencyKey":"{{idempotency_key}}","capturedAtMillis":1789372800000,"timeZoneId":"Africa/Lagos","mimeType":"audio/mp4","container":"mpeg4","encoder":"aac","channelCount":1,"sampleRateHz":16000,"durationMillis":1000,"sizeBytes":84217}'
+        contentType: application/json
+      - name: audio
+        type: file
+        value:
+          - recording.m4a
+        contentType: audio/mp4
+  auth:
+    type: bearer
+    token: "{{accessToken}}"
+
+runtime:
+  scripts:
+    - type: before-request
+      code: |-
+        const crypto = require('crypto');
+        const key = crypto.randomUUID();
+        bru.setVar('idempotency_key', key);
+
+settings:
+  encodeUrl: true
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5
