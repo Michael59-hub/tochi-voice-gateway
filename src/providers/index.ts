@@ -3,6 +3,7 @@ import { MockAdapter } from './mockAdapter';
 import { SaharaAdapter } from './saharaAdapter';
 import { MockProposalProvider } from './mockProposalProvider';
 import { VoiceProposalProvider } from './types';
+import { LlmProposalProvider } from './llmProposalProvider';
 
 export function getPrimaryProvider(): SpeechProviderAdapter {
   const mode = process.env.VOICE_PROVIDER_MODE ?? 'mock';
@@ -18,5 +19,8 @@ export function getPrimaryProvider(): SpeechProviderAdapter {
 }
 
 export function getPrimaryProposalProvider(): VoiceProposalProvider {
-  return new MockProposalProvider();
+  const mode = process.env.VOICE_PROPOSAL_PROVIDER_MODE ?? 'auto';
+  if (mode === 'mock') return new MockProposalProvider();
+  if (mode === 'llm' || mode === 'auto') return new LlmProposalProvider();
+  throw new Error('Unknown VOICE_PROPOSAL_PROVIDER_MODE');
 }

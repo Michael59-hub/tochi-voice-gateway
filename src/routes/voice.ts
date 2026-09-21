@@ -13,6 +13,7 @@ import {
   markVoiceRequestFailed,
 } from '../lib/idempotency';
 import { getPrimaryProvider, getPrimaryProposalProvider } from '../providers';
+import { ProposalProviderError } from '../providers/llmProposalProvider';
 import {
   validateVoiceActionDraftV2,
   validateVoiceProposeMetadataV2,
@@ -48,6 +49,12 @@ const metadataSchema = {
   schemaVersion: 1,
 } as const;
 
+/** One bounded request: Sahara transcription plus proposal generation. */
+const VOICE_BUDGET_MS = 145_000;
+const TIMEZONE_PATTERN = /^[A-Za-z0-9_+\-/]{1,64}$/;
+
+/** /transcribe is transcription-only, including the authorized parse=false approval turn. */
+
 voiceRouter.post(
   '/transcribe',
   requireInstallationAuth,
@@ -80,7 +87,10 @@ voiceRouter.post(
     if (meta.schemaVersion !== metadataSchema.schemaVersion) {
       return res.status(400).json({ error: 'UNSUPPORTED_SCHEMA_VERSION' });
     }
-    if (!meta.capturedAtEpochMs || !meta.timezone || typeof meta.parse !== 'boolean') {
+    if (!Number.isFinite(meta.capturedAtEpochMs) || meta.capturedAtEpochMs <= 0 ||
+        typeof meta.timezone !== 'string' || !TIMEZONE_PATTERN.test(meta.timezone) ||
+        typeof meta.parse !== 'boolean' ||
+        (meta.languageHint !== undefined && typeof meta.languageHint !== 'string')) {
       return res.status(422).json({ error: 'INVALID_METADATA' });
     }
 
@@ -91,6 +101,7 @@ voiceRouter.post(
         error: validation.errorCode,
       });
     }
+    const detectedMime = validation.detectedMime;
     const installationId = req.principal!.installationId;
     const audioSha256 = createHash('sha256').update(req.file.buffer).digest('hex');
 
@@ -102,7 +113,7 @@ voiceRouter.post(
       languageHint: meta.languageHint ?? null,
       parse: meta.parse,
       schemaVersion: meta.schemaVersion,
-      normalizedMimeAndContainer: req.file.mimetype,
+      normalizedMimeAndContainer: detectedMime,
     });
 
     const reservation = await reserveVoiceRequest(installationId, idempotencyKey, fingerprint);
@@ -118,17 +129,15 @@ voiceRouter.post(
         break; // proceed
     }
 
+    const deadline = Date.now() + VOICE_BUDGET_MS;
     try {
-      // Step 3.7 mock adapter stand-in — replace with the real provider adapter
-      // interface call once Phase 4 lands. Kept behind this single call site
-      // deliberately so swapping providers later touches only this line.
       const provider = getPrimaryProvider();
-      const transcriptionResult = await provider.transcribe({
+      const transcriptionResult = await withDeadline(provider.transcribe({
         audioBuffer: req.file.buffer,
         fileName: req.file.originalname || 'audio.wav',
-        mimeType: req.file.mimetype, // e.g. "audio/wav" — or better, thread through the file-type-detected mime if validateAudioUpload returns it
+        mimeType: detectedMime,
         languageHint: meta.languageHint,
-      });
+      }), deadline);
 
       if (transcriptionResult.kind === 'FAILURE') {
         await markVoiceRequestFailed(installationId, idempotencyKey);
@@ -140,23 +149,16 @@ voiceRouter.post(
         requestId: randomUUID(),
         transcript: transcriptionResult.transcript,
         provider: transcriptionResult.provider,
-        ...(meta.parse
-          ? {
-              draft: {
-                schemaVersion: 1,
-                intent: 'CREATE_REMINDER',
-                title: 'submit my assignment',
-                rawTimePhrase: 'tomorrow at 8 in the morning',
-              },
-            }
-          : {}),
       };
 
       await markVoiceRequestCompleted(installationId, idempotencyKey);
       return res.status(200).json(result);
     } catch (err) {
       await markVoiceRequestFailed(installationId, idempotencyKey);
-      return res.status(502).json({ error: 'PROVIDER_FAILURE' });
+      const timedOut = err instanceof Error && err.message === 'VOICE_BUDGET_EXCEEDED';
+      return res.status(timedOut ? 504 : 502).json({
+        error: timedOut ? 'TIMEOUT' : 'PROVIDER_FAILURE',
+      });
     }
   },
 );
@@ -246,12 +248,13 @@ voiceRouter.post(
         break;
     }
 
+    const deadline = Date.now() + VOICE_BUDGET_MS;
     try {
-      const transcription = await getPrimaryProvider().transcribe({
+      const transcription = await withDeadline(getPrimaryProvider().transcribe({
         audioBuffer: req.file.buffer,
         fileName: req.file.originalname || `${metadata.utteranceId}.m4a`,
         mimeType: validation.detectedMime,
-      });
+      }), deadline);
       if (transcription.kind === 'FAILURE') {
         await markVoiceRequestFailed(installationId, idempotencyKey);
         if (transcription.errorCode === 'RATE_LIMITED') {
@@ -266,12 +269,12 @@ voiceRouter.post(
         return res.status(502).json({ error: 'PROVIDER_FAILURE' });
       }
 
-      const proposed = await getPrimaryProposalProvider().propose({
+      const proposed = await withDeadline(getPrimaryProposalProvider().propose({
         utteranceId: metadata.utteranceId,
         transcript: transcription.transcript,
         capturedAtMillis: metadata.capturedAtMillis,
         timeZoneId: metadata.timeZoneId,
-      });
+      }), deadline);
       const draft = validateVoiceActionDraftV2(proposed, metadata.utteranceId);
       if (!draft.ok) {
         await markVoiceRequestFailed(installationId, idempotencyKey);
@@ -280,12 +283,32 @@ voiceRouter.post(
 
       await markVoiceRequestCompleted(installationId, idempotencyKey);
       return res.status(200).json(draft.value);
-    } catch {
+    } catch (err) {
       await markVoiceRequestFailed(installationId, idempotencyKey);
-      return res.status(502).json({ error: 'PROVIDER_FAILURE' });
+      const category = err instanceof ProposalProviderError ? err.category : null;
+      if (category === 'RATE_LIMITED') return res.status(429).json({ error: 'RATE_LIMITED' });
+      const timedOut = category === 'TIMEOUT' ||
+        (err instanceof Error && err.message === 'VOICE_BUDGET_EXCEEDED');
+      return res.status(timedOut ? 504 : 502).json({
+        error: timedOut ? 'PROVIDER_TIMEOUT' : 'PROVIDER_FAILURE',
+      });
     }
   },
 );
+
+async function withDeadline<T>(work: Promise<T>, deadlineEpochMs: number): Promise<T> {
+  const remaining = deadlineEpochMs - Date.now();
+  if (remaining <= 0) throw new Error('VOICE_BUDGET_EXCEEDED');
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const budget = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error('VOICE_BUDGET_EXCEEDED')), remaining);
+  });
+  try {
+    return await Promise.race([work, budget]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
 
 voiceRouter.get(
   '/requests/:idempotencyKey/status',

@@ -30,6 +30,7 @@ vi.mock('../src/providers', () => ({
 }));
 
 import { signAccessToken } from '../src/lib/jwt';
+import { ProposalProviderError } from '../src/providers/llmProposalProvider';
 import { voiceRouter } from '../src/routes/voice';
 
 const app = express();
@@ -189,6 +190,17 @@ describe('POST /v1/voice/propose', () => {
     expect(JSON.stringify(response.body)).not.toContain('private provider response');
   });
 
+  it.each([
+    ['RATE_LIMITED', 429, 'RATE_LIMITED'],
+    ['TIMEOUT', 504, 'PROVIDER_TIMEOUT'],
+    ['PROVIDER_FAILURE', 502, 'PROVIDER_FAILURE'],
+  ] as const)('fails closed when proposal generation reports %s', async (category, status, error) => {
+    mocks.propose.mockRejectedValueOnce(new ProposalProviderError(category));
+    const response = await propose().expect(status, { error });
+    expect(response.body).not.toHaveProperty('draft');
+    expect(mocks.failed).toHaveBeenCalledWith('installation-1', 'utt-route');
+  });
+
   it('keeps the existing v1 transcribe response available', async () => {
     const response = await request(app)
       .post('/v1/voice/transcribe')
@@ -203,5 +215,6 @@ describe('POST /v1/voice/propose', () => {
       .attach('audio', audio, { filename: 'voice.m4a', contentType: 'audio/mp4' })
       .expect(200);
     expect(response.body).toMatchObject({ schemaVersion: 1, transcript: 'add buy milk', provider: 'mock' });
+    expect(response.body).not.toHaveProperty('draft');
   });
 });
