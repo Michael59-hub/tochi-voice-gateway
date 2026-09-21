@@ -15,6 +15,9 @@ http:
   auth: inherit
 
 runtime:
+  variables:
+    - name: refreshCredential
+      value: 6Dm0XH_ZqMPr-SkVQmk6kxJgQ9PIo89TlPsSOTZVSA8
   scripts:
     - type: after-response
       code: |-

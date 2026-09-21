@@ -132,7 +132,7 @@ voiceRouter.post(
 
       if (transcriptionResult.kind === 'FAILURE') {
         await markVoiceRequestFailed(installationId, idempotencyKey);
-        return res.status(502).json({ error: 'PROVIDER_FAILURE' });
+        return res.status(502).json({ error: 'PROVIDER_FAILURE' , message: transcriptionResult.message });
       }
 
       const result = {

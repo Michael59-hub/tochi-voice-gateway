@@ -8,7 +8,7 @@ http:
   url: http://localhost:3000/v1/voice/transcribe
   headers:
     - name: Idempotency-Key
-      value: "{{idempotency_key}}"
+      value: "{{idempotency_key}"
   body:
     type: multipart-form
     data:
@@ -19,11 +19,11 @@ http:
       - name: audio
         type: file
         value:
-          - planSpecificTitle.wav
+          - Recording0004_pcm16.wav
         contentType: File
   auth:
     type: bearer
-    token: "{{accessToken}}"
+    token: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpbnN0YWxsYXRpb25JZCI6IjMwY2RkNTc2LWFiZTAtNDk5NS1hZGE5LTAzODI1NTMzNzlhNyIsInRpZXIiOiJVTlZFUklGSUVEIiwiaWF0IjoxNzg5NTYxNDU2LCJleHAiOjE3ODk1NjIzNTZ9.V7pEEi6bBbYNCeZNrkdxqG9HHZ2J_53Tgo3a4Od3sKI
 
 runtime:
   scripts:
@@ -45,3 +45,4 @@ settings:
   timeout: 0
   followRedirects: true
   maxRedirects: 5
+​
