@@ -1,4 +1,5 @@
 import { fileTypeFromBuffer } from 'file-type';
+import { parseBuffer } from 'music-metadata';
 
 const ALLOWED_MIME_TYPES = new Set([
   'audio/mp4', // M4A/AAC
@@ -11,34 +12,79 @@ const ALLOWED_MIME_TYPES = new Set([
 
 const MAX_AUDIO_BYTES = 5 * 1024 * 1024; // 5 MB server maximum, per Step 3.5
 const MAX_DURATION_SECONDS = 60;
+const DURATION_MISMATCH_TOLERANCE_SECONDS = 2;
 
 export type UploadValidationResult =
-  | { ok: true; detectedMime: string }
+  | { ok: true; detectedMime: string; actualDurationSeconds?: number }
   | { ok: false; errorCode: 'TOO_LONG' | 'BAD_FORMAT' };
+
+interface Mp4AudioFormat {
+  codec?: string;
+  hasAudio?: boolean;
+  hasVideo?: boolean;
+  numberOfChannels?: number;
+  sampleRate?: number;
+}
+
+/** Generic MP4 byte signatures are acceptable only when the parsed track is audio-only AAC. */
+export function isAudioOnlyAacMp4(format: Mp4AudioFormat): boolean {
+  const codecs = format.codec?.toUpperCase().split('+').map(part => part.trim()) ?? [];
+  return format.hasAudio === true &&
+    format.hasVideo === false &&
+    codecs.length > 0 &&
+    codecs.every(codec => codec === 'MPEG-4/AAC' || codec === 'AAC') &&
+    (format.numberOfChannels ?? 0) > 0 &&
+    (format.sampleRate ?? 0) > 0;
+}
 
 export async function validateAudioUpload(
   buffer: Buffer,
   claimedDurationSeconds: number,
   maxAudioBytes: number = MAX_AUDIO_BYTES,
 ): Promise<UploadValidationResult> {
+  if (!Number.isFinite(claimedDurationSeconds) || claimedDurationSeconds < 0 ||
+      claimedDurationSeconds > MAX_DURATION_SECONDS) {
+    return { ok: false, errorCode: 'BAD_FORMAT' };
+  }
   if (buffer.byteLength > maxAudioBytes) {
     return { ok: false, errorCode: 'TOO_LONG' };
   }
 
   // Sniff actual file signature — do not trust the client-supplied MIME/extension.
   const detected = await fileTypeFromBuffer(buffer);
-  if (!detected || !ALLOWED_MIME_TYPES.has(detected.mime)) {
+  const genericMp4Candidate = detected?.mime === 'video/mp4';
+  if (!detected || (!ALLOWED_MIME_TYPES.has(detected.mime) && !genericMp4Candidate)) {
     return { ok: false, errorCode: 'BAD_FORMAT' };
   }
 
-  const detectedMime = detected.mime === 'audio/x-m4a' ? 'audio/mp4' : detected.mime;
+  const detectedMime = genericMp4Candidate || detected.mime === 'audio/x-m4a'
+    ? 'audio/mp4' : detected.mime;
+  let actualDurationSeconds: number | undefined;
+  if (genericMp4Candidate) {
+    try {
+      const metadata = await parseBuffer(buffer, { path: `audio.${detected.ext}` });
+      actualDurationSeconds = metadata.format.duration;
+      if (!isAudioOnlyAacMp4(metadata.format) ||
+          actualDurationSeconds === undefined || !Number.isFinite(actualDurationSeconds) ||
+          actualDurationSeconds <= 0) {
+        return { ok: false, errorCode: 'BAD_FORMAT' };
+      }
+    } catch {
+      return { ok: false, errorCode: 'BAD_FORMAT' };
+    }
+  }
   if (detectedMime === 'audio/mp4') {
-    const actualDurationSeconds = readM4aDurationSeconds(buffer);
-    if (actualDurationSeconds === null) return { ok: false, errorCode: 'BAD_FORMAT' };
+    actualDurationSeconds ??= readM4aDurationSeconds(buffer) ?? undefined;
+    if (actualDurationSeconds === undefined || actualDurationSeconds <= 0) {
+      return { ok: false, errorCode: 'BAD_FORMAT' };
+    }
     if (actualDurationSeconds > MAX_DURATION_SECONDS) return { ok: false, errorCode: 'TOO_LONG' };
+    if (Math.abs(actualDurationSeconds - claimedDurationSeconds) > DURATION_MISMATCH_TOLERANCE_SECONDS) {
+      return { ok: false, errorCode: 'BAD_FORMAT' };
+    }
   }
 
-  return { ok: true, detectedMime };
+  return { ok: true, detectedMime, actualDurationSeconds };
 }
 
 function readM4aDurationSeconds(buffer: Buffer): number | null {

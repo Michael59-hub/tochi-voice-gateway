@@ -55,7 +55,7 @@ ADMIN_PORT=4000
 
 `DATABASE_URL`, `JWT_SIGNING_SECRET`, `REQUEST_FINGERPRINT_SECRET`, `ADMIN_API_SECRET`, `VOICE_PROVIDER_MODE`, `PORT`, and `ADMIN_PORT` are used by the application. `DB_USER`, `DB_PASSWORD`, `DB_NAME`, and `DB_PORT` are used by Docker Compose and should match the local database connection in `DATABASE_URL`. `SAHARA_API_URL` and `SAHARA_API_KEY` are required only when `VOICE_PROVIDER_MODE=sahara`.
 
-The server loads `.env` automatically when it starts.
+The direct `src/server.ts` entrypoint does not load `.env` itself. For local development, export the intended variables or start with `node --env-file=.env --import tsx src/server.ts` from this directory. Do not print the values.
 
 Do not commit `.env` or expose any signing, fingerprint, admin, or provider secret. Refresh credentials are returned only at registration or refresh time and should be stored securely by the client. The admin API binds to `127.0.0.1` and requires `X-Admin-Secret`.
 
@@ -178,10 +178,10 @@ curl -X POST http://localhost:3000/v1/voice/transcribe \
   -H 'Authorization: Bearer ACCESS_TOKEN' \
   -H 'Idempotency-Key: request-123' \
   -F 'audio=@recording.m4a;type=audio/mp4' \
-  -F 'meta={"schemaVersion":1,"capturedAtEpochMs":1760000000000,"timezone":"UTC","languageHint":"en-US","parse":true}'
+  -F 'meta={"schemaVersion":1,"capturedAtEpochMs":1760000000000,"timezone":"UTC","languageHint":"en-US","parse":false}'
 ```
 
-Supported detected audio formats are MP4/M4A, WAV, OGG, and MP3. The metadata requires `schemaVersion: 1`, `capturedAtEpochMs`, `timezone`, and a boolean `parse`. An optional `languageHint` can be passed to the provider. A successful response contains the transcript, provider name, and a request ID; when `parse` is true it also contains the current draft reminder shape.
+Supported detected audio formats are MP4/M4A, WAV, OGG, and MP3. The metadata requires `schemaVersion: 1`, a positive `capturedAtEpochMs`, a timezone, and a boolean `parse`. An optional `languageHint` can be passed to the provider. Under the accepted Gate 8J amendment, a **separate** spoken-approval recording uses `parse=false` here. The response contains only schema version, transcript, provider, and request ID; neither `parse=false` nor `parse=true` emits a proposal draft. `/v1/voice/propose` v2 is the only Gate 8J proposal path. This endpoint never approves or executes an action.
 
 The endpoint returns `400` for missing idempotency keys or audio, `415` for unsupported audio, `422` for invalid metadata, `409` for idempotency conflicts or duplicate/in-progress requests, `429` for quota/concurrency limits, `502` for provider failures, and `503` when voice processing is disabled. The default `UNVERIFIED` tier allows one concurrent request and 20 requests per day; the `VERIFIED` tier allows three concurrent requests and 200 requests per day. The process-wide provider concurrency limit is 10.
 
@@ -208,7 +208,7 @@ The `metadata` part is strict JSON:
 }
 ```
 
-The metadata idempotency key must equal the `Idempotency-Key` header. Audio is limited to 1 MB and 60 seconds. This v2 endpoint accepts Tochi's Android format: AAC in an MPEG-4/M4A container (`audio/mp4`, `.m4a`); its signature and MP4 container duration are validated. The v1 `/transcribe` endpoint retains its broader format support. Success is a raw `VoiceActionDraft` v2 object, not a response wrapper:
+The metadata idempotency key must equal the `Idempotency-Key` header. Audio is limited to 1 MB and 60 seconds. This v2 endpoint accepts Tochi's Android format: AAC in an MPEG-4/M4A container (`audio/mp4`, `.m4a`). A generic `video/mp4` byte signature is accepted only after parsing confirms an audio-only AAC track with valid channel, sample-rate, and duration metadata; it is then normalized to `audio/mp4`. Byte validation and declared-vs-detected MIME checks remain active. The v1 `/transcribe` endpoint retains its broader format support. Success is a raw `VoiceActionDraft` v2 object, not a response wrapper:
 
 ```json
 {
@@ -254,7 +254,7 @@ The switch affects the current process only.
 
 ### Provider selection
 
-`VOICE_PROVIDER_MODE=mock` is the default and returns deterministic mock transcription data. `/propose` then uses the server-side deterministic mock proposal provider for local Android integration. Set `VOICE_PROVIDER_MODE=sahara` and provide `SAHARA_API_URL` and `SAHARA_API_KEY` to call the Sahara transcription adapter; a production proposal provider remains future work.
+`VOICE_PROVIDER_MODE=mock` is the default speech adapter and returns deterministic mock transcription data. Set `VOICE_PROVIDER_MODE=sahara` and provide `SAHARA_API_URL` and `SAHARA_API_KEY` to call Sahara. Proposal selection is separate: `VOICE_PROPOSAL_PROVIDER_MODE=auto` (default) or `llm` uses Gemini via `GEMINI_API_KEY`; only explicit `VOICE_PROPOSAL_PROVIDER_MODE=mock` selects canned proposals. Missing or failing Gemini configuration returns a sanitized provider error, never a plausible mock draft. `VOICE_PROPOSAL_MODEL` optionally overrides the proposal model.
 
 The Sahara adapter sends the original audio filename, MIME type, and audio bytes as a multipart request. It passes `languageHint` through to Intron and defaults to `en` when no language hint is provided. The client-side timeout is 125 seconds to accommodate Intron's synchronous processing window. HTTP 400, 429, and 503 responses are mapped to unsupported-input, rate-limit, and timeout provider failures respectively; other non-success responses are returned as provider failures.
 
