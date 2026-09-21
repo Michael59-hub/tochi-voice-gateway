@@ -3,7 +3,7 @@ import type { ProposalRequest, VoiceProposalProvider } from './types';
 import { GoogleGenerativeAI } from '@google/generative-ai';
 
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
-const MODEL_NAME = process.env.VOICE_PROPOSAL_MODEL ?? 'gemini-2.0-flash';
+const MODEL_NAME = process.env.VOICE_PROPOSAL_MODEL ?? 'gemini-3.6-flash';
 const TIMEOUT_MS = 20_000;
 const genAI = GEMINI_API_KEY ? new GoogleGenerativeAI(GEMINI_API_KEY) : null;
 
@@ -50,10 +50,24 @@ export function classifyProposalFailure(error: unknown): ProposalFailureCategory
   if (error instanceof ProposalProviderError) return error.category;
   if (typeof error === 'object' && error !== null) {
     const status = 'status' in error ? error.status : undefined;
-    if (status === 429) return 'RATE_LIMITED';
+    if (status === 429 || status === 503) return 'RATE_LIMITED';
     if (status === 408 || status === 504) return 'TIMEOUT';
   }
   return 'PROVIDER_FAILURE';
+}
+
+async function callWithRetry<T>(fn: () => Promise<T>, retries = 2, delayMs = 1000): Promise<T> {
+  try {
+    return await fn();
+  } catch (error: any) {
+    const is503 = error?.status === 503 || error?.message?.includes('503');
+    if (is503 && retries > 0) {
+      console.warn(`[Gemini] Hit 503 spike, retrying in ${delayMs}ms... (${retries} retries left)`);
+      await new Promise((r) => setTimeout(r, delayMs));
+      return callWithRetry(fn, retries - 1, delayMs * 2);
+    }
+    throw error;
+  }
 }
 
 /** Sahara transcript → Gate 8J schema v2 proposal; never synthesize a draft on Gemini failure. */
@@ -89,8 +103,14 @@ export class LlmProposalProvider implements VoiceProposalProvider {
       const timeout = new Promise<never>((_, reject) => {
         timer = setTimeout(() => reject(new ProposalProviderError('TIMEOUT')), TIMEOUT_MS);
       });
-      const result = await Promise.race([model.generateContent(userText), timeout])
-        .finally(() => { if (timer) clearTimeout(timer); });
+      // Wrap the generateContent call with callWithRetry:
+      const result = await Promise.race([
+        callWithRetry(() => model.generateContent(userText)),
+        timeout,
+      ]).finally(() => {
+        if (timer) clearTimeout(timer);
+      });
+
       const text = result.response.text();
       const parsed = JSON.parse(text) as VoiceActionDraftV2;
       return {
@@ -100,6 +120,7 @@ export class LlmProposalProvider implements VoiceProposalProvider {
         originalTranscript: bounded,
       };
     } catch (error) {
+      console.error('LLM Proposal Provider Error:', error);
       throw new ProposalProviderError(classifyProposalFailure(error));
     }
   }

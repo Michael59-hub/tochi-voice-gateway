@@ -255,6 +255,7 @@ voiceRouter.post(
         fileName: req.file.originalname || `${metadata.utteranceId}.m4a`,
         mimeType: validation.detectedMime,
       }), deadline);
+      console.log('Transcription result:', transcription);
       if (transcription.kind === 'FAILURE') {
         await markVoiceRequestFailed(installationId, idempotencyKey);
         if (transcription.errorCode === 'RATE_LIMITED') {
@@ -275,7 +276,9 @@ voiceRouter.post(
         capturedAtMillis: metadata.capturedAtMillis,
         timeZoneId: metadata.timeZoneId,
       }), deadline);
+      console.log('Proposal result:', proposed);
       const draft = validateVoiceActionDraftV2(proposed, metadata.utteranceId);
+      console.log('Draft validation result:', draft);
       if (!draft.ok) {
         await markVoiceRequestFailed(installationId, idempotencyKey);
         return res.status(422).json({ error: 'INVALID_PROPOSAL' });
