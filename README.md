@@ -49,6 +49,9 @@ ADMIN_API_SECRET=replace-with-an-admin-secret
 VOICE_PROVIDER_MODE=mock
 SAHARA_API_URL=https://example.invalid
 SAHARA_API_KEY=replace-when-using-sahara
+GEMINI_API_KEY=replace-with-gemini-key
+GROQ_API_KEY=replace-with-groq-key
+MISTRAL_API_KEY=replace-with-mistral-key
 PORT=3000
 ADMIN_PORT=4000
 ```
@@ -254,7 +257,7 @@ The switch affects the current process only.
 
 ### Provider selection
 
-`VOICE_PROVIDER_MODE=mock` is the default speech adapter and returns deterministic mock transcription data. Set `VOICE_PROVIDER_MODE=sahara` and provide `SAHARA_API_URL` and `SAHARA_API_KEY` to call Sahara. Proposal selection is separate: `VOICE_PROPOSAL_PROVIDER_MODE=auto` (default) or `llm` uses Gemini via `GEMINI_API_KEY`; only explicit `VOICE_PROPOSAL_PROVIDER_MODE=mock` selects canned proposals. Missing or failing Gemini configuration returns a sanitized provider error, never a plausible mock draft. `VOICE_PROPOSAL_MODEL` optionally overrides the proposal model.
+`VOICE_PROVIDER_MODE=mock` is the default speech adapter and returns deterministic mock transcription data. Set `VOICE_PROVIDER_MODE=sahara` and provide `SAHARA_API_URL` and `SAHARA_API_KEY` to call Sahara. Proposal selection is separate: `VOICE_PROPOSAL_PROVIDER_MODE=auto` (default) or `llm` uses Gemini via `GEMINI_API_KEY`; a Gemini HTTP 503 automatically falls back to Groq, then Mistral if Groq fails. Configure `GROQ_API_KEY` and `MISTRAL_API_KEY` for those fallbacks. Only explicit `VOICE_PROPOSAL_PROVIDER_MODE=mock` selects canned proposals. Missing or failing provider configuration returns a sanitized provider error, never a plausible mock draft. `VOICE_PROPOSAL_MODEL`, `GROQ_PROPOSAL_MODEL`, and `MISTRAL_PROPOSAL_MODEL` optionally override the models. The default fallback models are `llama-3.3-70b-versatile` and `mistral-large-latest`; `GROQ_API_URL` and `MISTRAL_API_URL` can override their endpoints for compatible gateways.
 
 The Sahara adapter sends the original audio filename, MIME type, and audio bytes as a multipart request. It passes `languageHint` through to Intron and defaults to `en` when no language hint is provided. The client-side timeout is 125 seconds to accommodate Intron's synchronous processing window. HTTP 400, 429, and 503 responses are mapped to unsupported-input, rate-limit, and timeout provider failures respectively; other non-success responses are returned as provider failures.
 

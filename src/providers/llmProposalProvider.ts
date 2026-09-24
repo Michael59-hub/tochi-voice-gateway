@@ -7,7 +7,7 @@ const MODEL_NAME = process.env.VOICE_PROPOSAL_MODEL ?? 'gemini-3.6-flash';
 const TIMEOUT_MS = 20_000;
 const genAI = GEMINI_API_KEY ? new GoogleGenerativeAI(GEMINI_API_KEY) : null;
 
-const SYSTEM_PROMPT = `You convert a spoken voice transcript into one JSON VoiceActionDraft for Tochi.
+export const SYSTEM_PROMPT = `You convert a spoken voice transcript into one JSON VoiceActionDraft for Tochi.
 You have no tools, no user data, no task list, and no calendar.
 You cannot save, schedule, approve, or execute anything.
 
@@ -40,7 +40,7 @@ If unsafe/destructive/unclear, return intent UNKNOWN with ambiguous true.`;
 export type ProposalFailureCategory = 'RATE_LIMITED' | 'TIMEOUT' | 'PROVIDER_FAILURE';
 
 export class ProposalProviderError extends Error {
-  constructor(readonly category: ProposalFailureCategory) {
+  constructor(readonly category: ProposalFailureCategory, readonly status?: number) {
     super(category);
     this.name = 'ProposalProviderError';
   }
@@ -54,20 +54,6 @@ export function classifyProposalFailure(error: unknown): ProposalFailureCategory
     if (status === 408 || status === 504) return 'TIMEOUT';
   }
   return 'PROVIDER_FAILURE';
-}
-
-async function callWithRetry<T>(fn: () => Promise<T>, retries = 2, delayMs = 1000): Promise<T> {
-  try {
-    return await fn();
-  } catch (error: any) {
-    const is503 = error?.status === 503 || error?.message?.includes('503');
-    if (is503 && retries > 0) {
-      console.warn(`[Gemini] Hit 503 spike, retrying in ${delayMs}ms... (${retries} retries left)`);
-      await new Promise((r) => setTimeout(r, delayMs));
-      return callWithRetry(fn, retries - 1, delayMs * 2);
-    }
-    throw error;
-  }
 }
 
 /** Sahara transcript → Gate 8J schema v2 proposal; never synthesize a draft on Gemini failure. */
@@ -103,9 +89,8 @@ export class LlmProposalProvider implements VoiceProposalProvider {
       const timeout = new Promise<never>((_, reject) => {
         timer = setTimeout(() => reject(new ProposalProviderError('TIMEOUT')), TIMEOUT_MS);
       });
-      // Wrap the generateContent call with callWithRetry:
       const result = await Promise.race([
-        callWithRetry(() => model.generateContent(userText)),
+        model.generateContent(userText),
         timeout,
       ]).finally(() => {
         if (timer) clearTimeout(timer);
@@ -121,7 +106,10 @@ export class LlmProposalProvider implements VoiceProposalProvider {
       };
     } catch (error) {
       console.error('LLM Proposal Provider Error:', error);
-      throw new ProposalProviderError(classifyProposalFailure(error));
+      const status = typeof error === 'object' && error !== null && 'status' in error
+        ? Number(error.status)
+        : undefined;
+      throw new ProposalProviderError(classifyProposalFailure(error), status);
     }
   }
 }

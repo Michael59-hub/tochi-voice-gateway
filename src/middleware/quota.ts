@@ -51,13 +51,15 @@ export async function enforceQuota(req: Request, res: Response, next: NextFuncti
   concurrentByInstallation.set(principal.installationId, current + 1);
   globalConcurrent += 1;
 
-  res.on('finish', () => {
-    concurrentByInstallation.set(
-      principal.installationId,
-      Math.max(0, (concurrentByInstallation.get(principal.installationId) ?? 1) - 1),
-    );
+  const release = () => {
+  concurrentByInstallation.set(
+    principal.installationId,
+    Math.max(0, (concurrentByInstallation.get(principal.installationId) ?? 1) - 1),
+  );
     globalConcurrent = Math.max(0, globalConcurrent - 1);
-  });
+  };
+  res.once('finish', release);
+  res.once('close', release);
 
   next();
 }
